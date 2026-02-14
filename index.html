@@ -1,0 +1,1304 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini Plumber Adventure</title>
+  <style>
+    html, body { margin:0; padding:0; background:#87ceeb; font-family:system-ui,sans-serif; }
+    #wrap { display:flex; flex-direction:column; align-items:center; padding:12px; }
+    canvas { border:3px solid #333; background: linear-gradient(#9fe8ff 0%, #9fe8ff 62%, #c9f7b8 62%, #c9f7b8 100%); image-rendering: pixelated; max-width:100%; }
+    .hud { margin:8px 0; font-weight:700; color:#222; }
+    .tips { color:#333; font-size:14px; }
+    #mobileControls{ display:none; width:min(960px,100%); margin-top:8px; user-select:none; }
+    #mobileControls .row{ display:flex; gap:10px; justify-content:center; margin:6px 0; }
+    #mobileControls button{ border:0; border-radius:14px; padding:12px 16px; font-weight:700; background:#1d3a7a; color:#fff; min-width:72px; touch-action:manipulation; }
+    #mobileControls .wide{ min-width:126px; }
+    #mobileControls .mobileMain{ justify-content:space-between; align-items:center; }
+    #mobileControls .stickPad{ position:relative; width:150px; height:90px; border-radius:50px; background:rgba(255,255,255,0.08); }
+    #mobileControls .stick{ position:absolute; top:22px; width:52px; height:46px; border-radius:24px; padding:0; font-size:22px; }
+    #mobileControls .stick.left{ left:8px; }
+    #mobileControls .stick.right{ right:8px; }
+    #mobileControls .stickCenter{ position:absolute; left:50%; top:50%; width:22px; height:22px; transform:translate(-50%,-50%); border-radius:50%; background:rgba(255,255,255,0.2); }
+    #mobileControls .actionPad{ display:grid; grid-template-columns:1fr 1fr; gap:8px; width:250px; }
+    @media (max-width: 900px), (pointer: coarse){
+      #mobileControls{ display:block; }
+      canvas{ touch-action:none; }
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hud" id="hud">Score: 0 | Lives: 3</div>
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="mobileControls">
+    <div class="row mobileMain">
+      <div class="stickPad">
+        <button class="stick left" data-key="ArrowLeft">◀</button>
+        <button class="stick right" data-key="ArrowRight">▶</button>
+        <div class="stickCenter"></div>
+      </div>
+      <div class="actionPad">
+        <button data-key="Space" class="wide">JUMP</button>
+        <button data-key="KeyX">FLY</button>
+        <button data-key="KeyF">SPECIAL</button>
+        <button data-key="Enter" class="wide">OK</button>
+      </div>
+    </div>
+    <div class="row">
+      <button data-key="KeyR">RESTART</button>
+      <button id="fullscreenBtn" class="wide">FULLSCREEN</button>
+    </div>
+  </div>
+  <div class="tips">Controls: ← → move, Z/Space jump, X rocket fly, C switch character (1/2), Q/W/E choose special, F use special, R restart</div>
+  <div class="tips" style="margin-top:4px;">At game start: press C to choose character, then press ENTER/SPACE to start.</div>
+  <div class="tips" id="abilityGuide" style="margin-top:6px; font-weight:700; color:#1f2a44;">
+    Character 1 (Original): choose one special → Q Speed / W Triple Jump buff / E Shield, press F to use.
+    Character 2 (Girl): fixed special → F activates 10s Fly Mode (hold X to fly).
+  </div>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const mobileControls = document.getElementById('mobileControls');
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+  // --- simple synth SFX (no external files) ---
+  let audioCtx = null;
+  function ensureAudio(){
+    if(!audioCtx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      audioCtx = AC ? new AC() : null;
+    }
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  addEventListener('pointerdown', ensureAudio, {once:false});
+  addEventListener('keydown', ensureAudio, {once:false});
+
+  function tone(freq=440, dur=0.08, type='square', vol=0.03, glideTo=null){
+    if(!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    if(glideTo) o.frequency.exponentialRampToValueAtTime(glideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+
+  function noiseBurst(dur=0.08, vol=0.025, hp=600){
+    if(!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const len = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for(let i=0;i<len;i++) data[i] = (Math.random()*2-1) * (1 - i/len);
+    const src = audioCtx.createBufferSource();
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(hp, t0);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.buffer = buf;
+    src.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
+    src.start(t0); src.stop(t0 + dur + 0.01);
+  }
+
+  const SFX = {
+    jump(){ tone(520,0.07,'square',0.03,860); noiseBurst(0.03,0.008,1200); },
+    coin(){ tone(1100,0.045,'triangle',0.035,1500); setTimeout(()=>tone(1500,0.04,'triangle',0.03,1900),30); },
+    reward(){ tone(660,0.06,'triangle',0.03,990); setTimeout(()=>tone(990,0.06,'triangle',0.03,1320),45); setTimeout(()=>tone(1320,0.08,'triangle',0.03,1760),90); },
+    hurt(){ noiseBurst(0.09,0.02,700); tone(210,0.14,'sawtooth',0.03,90); },
+    explode(){ noiseBurst(0.18,0.05,180); tone(130,0.22,'sawtooth',0.04,45); setTimeout(()=>noiseBurst(0.08,0.02,90),50); },
+    stomp(){ tone(320,0.04,'square',0.03,180); noiseBurst(0.025,0.01,900); },
+    levelUp(){ tone(660,0.07,'triangle',0.03,950); setTimeout(()=>tone(980,0.07,'triangle',0.03,1320),70); setTimeout(()=>tone(1320,0.09,'triangle',0.03,1760),140); },
+    win(){ tone(740,0.1,'triangle',0.03,1040); setTimeout(()=>tone(1040,0.1,'triangle',0.03,1480),90); setTimeout(()=>tone(1480,0.12,'triangle',0.03,1980),180); },
+    grass(){ noiseBurst(0.035,0.006,1400); }
+  };
+
+  const G = 2200;
+  const FRICTION = 0.84;
+  const SPEED = 1650;
+  const JUMP = 920;
+  const W = canvas.width, H = canvas.height;
+
+  const keys = {};
+  addEventListener('keydown', e => {
+    if (["ArrowLeft","ArrowRight","Space","Enter","KeyY","KeyZ","KeyX","KeyR","KeyC","Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","KeyQ","KeyW","KeyE","KeyF"].includes(e.code)) e.preventDefault();
+
+    if(luckyDrawOpen){
+      if(e.code==='Space' || e.code==='Enter'){ runLuckyDraw(); }
+      if(e.code==='Digit1') runLuckyDraw('speed');
+      if(e.code==='Digit2') runLuckyDraw('jump');
+      if(e.code==='Digit3') runLuckyDraw('shield');
+      if(e.code==='Digit4') runLuckyDraw('rocket');
+      if(e.code==='Digit5') runLuckyDraw('life');
+      if(e.code==='Digit6') runLuckyDraw('score');
+      return;
+    }
+
+    if(enteringName){
+      if(e.code==='Enter' && playerName.trim().length>0){ enteringName=false; showHomeScreen=true; return; }
+      if(e.code==='Backspace'){ playerName = playerName.slice(0,-1); return; }
+      if(e.key && e.key.length===1 && /[a-z0-9 _-]/i.test(e.key) && playerName.length<14){ playerName += e.key; return; }
+      return;
+    }
+
+    if(showHomeScreen){
+      if(e.code==='Enter' || e.code==='Space'){ showHomeScreen = false; selectingDifficulty = true; }
+      if(e.code==='KeyP'){ showHomeScreen = false; showPetsScreen = true; }
+      if(e.code==='KeyL'){ showHomeScreen = false; showLeaderboardScreen = true; }
+      return;
+    }
+
+    if(showPetsScreen){
+      if(e.code==='Escape' || e.code==='KeyB' || e.code==='Enter' || e.code==='Space'){
+        showPetsScreen = false; showHomeScreen = true;
+      }
+      return;
+    }
+
+    if(showLeaderboardScreen){
+      if(e.code==='Escape' || e.code==='KeyB' || e.code==='Enter' || e.code==='Space'){
+        showLeaderboardScreen = false; showHomeScreen = true;
+      }
+      return;
+    }
+
+    if(selectingDifficulty){
+      if(e.code==='ArrowLeft') difficultyIndex = Math.max(0, difficultyIndex-1);
+      if(e.code==='ArrowRight') difficultyIndex = Math.min(2, difficultyIndex+1);
+      if(e.code==='Digit1') difficultyIndex = 0;
+      if(e.code==='Digit2') difficultyIndex = 1;
+      if(e.code==='Digit3') difficultyIndex = 2;
+      if(e.code==='Space' || e.code==='Enter'){ selectingDifficulty = false; selectingCharacter = true; }
+      return;
+    }
+
+    if(selectingCharacter){
+      if(e.code==='KeyC') characterIndex = (characterIndex + 1) % characterThemes.length;
+      if(e.code==='Digit1') characterIndex = 0;
+      if(e.code==='Digit2') characterIndex = 1;
+      if(e.code==='Space' || e.code==='Enter'){ selectingCharacter = false; }
+      return;
+    }
+
+    keys[e.code] = true;
+    if (e.code === 'KeyR') reset();
+    if (e.code === 'KeyY'){
+      nextLevel();
+      if(!win) nextLevel();
+      return;
+    }
+    if (e.code === 'KeyQ') selectedAbilityByChar[characterIndex] = 'speed';
+    if (e.code === 'KeyW') selectedAbilityByChar[characterIndex] = 'jump';
+    if (e.code === 'KeyE') selectedAbilityByChar[characterIndex] = 'shield';
+    if (e.code === 'KeyF' && specialCooldown <= 0){
+      if(activePetName === 'Bird' && levelIndex===levels.length-1){
+        birdFlyTimer = 120;
+        specialCooldown = 18;
+        SFX.reward();
+      } else if(characterIndex === 1){
+        // Girl special: fly mode for 10s
+        girlFlyTimer = 10;
+        specialCooldown = 16;
+        SFX.reward();
+      } else {
+        const a = selectedAbilityByChar[characterIndex];
+        specialActiveTimer = 6;
+        specialCooldown = 12;
+        if(a === 'speed') speedBoostTimer = Math.max(speedBoostTimer, 5);
+        if(a === 'jump') jumpBoostTimer = Math.max(jumpBoostTimer, 5);
+        if(a === 'shield') shieldTimer = Math.max(shieldTimer, 5);
+        SFX.reward();
+      }
+    }
+  });
+  addEventListener('keyup', e => keys[e.code] = false);
+
+  // touch/mobile controls
+  if(mobileControls){
+    const setKey = (code, on) => {
+      keys[code] = on;
+      if(!on) return;
+      if(code==='KeyR') reset();
+
+      // basic menu navigation support on mobile
+      if(code==='Enter' || code==='Space'){
+        if(enteringName){
+          const n = prompt('Enter your nickname:', playerName || 'Player');
+          if(n !== null){ playerName=(n||'').trim().slice(0,14); if(playerName.length>0){ enteringName=false; showHomeScreen=true; } }
+          return;
+        }
+        if(showHomeScreen){ showHomeScreen=false; selectingDifficulty=true; return; }
+        if(showPetsScreen){ showPetsScreen=false; showHomeScreen=true; return; }
+        if(showLeaderboardScreen){ showLeaderboardScreen=false; showHomeScreen=true; return; }
+        if(selectingDifficulty){ selectingDifficulty=false; selectingCharacter=true; return; }
+        if(selectingCharacter){ selectingCharacter=false; return; }
+        if(luckyDrawOpen){ runLuckyDraw(); return; }
+      }
+
+      if(code==='ArrowLeft' && selectingDifficulty) difficultyIndex=Math.max(0,difficultyIndex-1);
+      if(code==='ArrowRight' && selectingDifficulty) difficultyIndex=Math.min(2,difficultyIndex+1);
+    };
+    mobileControls.querySelectorAll('button[data-key]').forEach(btn=>{
+      const code = btn.getAttribute('data-key');
+      const down = (e)=>{ e.preventDefault(); ensureAudio(); setKey(code,true); };
+      const up = (e)=>{ e.preventDefault(); setKey(code,false); };
+      btn.addEventListener('touchstart', down, {passive:false});
+      btn.addEventListener('touchend', up, {passive:false});
+      btn.addEventListener('touchcancel', up, {passive:false});
+      btn.addEventListener('mousedown', down);
+      btn.addEventListener('mouseup', up);
+      btn.addEventListener('mouseleave', up);
+    });
+  }
+
+  if(fullscreenBtn){
+    fullscreenBtn.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      try{
+        if(!document.fullscreenElement){ await document.documentElement.requestFullscreen(); }
+        else { await document.exitFullscreen(); }
+      }catch{}
+    });
+  }
+
+  canvas.addEventListener('click', e => {
+    if(enteringName){
+      const n = prompt('Enter your nickname:', playerName || 'Player');
+      if(n !== null){
+        playerName = (n || '').trim().slice(0,14);
+        if(playerName.length>0){ enteringName=false; showHomeScreen=true; }
+      }
+      return;
+    }
+    if(!showHomeScreen) return;
+    const r = canvas.getBoundingClientRect();
+    const sx = canvas.width / r.width, sy = canvas.height / r.height;
+    const x = (e.clientX - r.left) * sx, y = (e.clientY - r.top) * sy;
+
+    const playBtn = {x: W/2-120, y: H/2+20, w:240, h:52};
+    const petsBtn = {x: W/2-120, y: H/2+84, w:240, h:52};
+    const leadBtn = {x: W/2-120, y: H/2+148, w:240, h:52};
+    const inBtn = b => x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h;
+
+    if(inBtn(playBtn)){ showHomeScreen=false; selectingDifficulty=true; }
+    else if(inBtn(petsBtn)){ showHomeScreen=false; showPetsScreen=true; }
+    else if(inBtn(leadBtn)){ showHomeScreen=false; showLeaderboardScreen=true; }
+  });
+
+  const levels = [
+    {
+      groundY:470,
+      platforms:[{x:180,y:420,w:90,h:24},{x:330,y:370,w:80,h:24},{x:470,y:320,w:80,h:24},{x:620,y:280,w:90,h:24},{x:790,y:340,w:80,h:24},{x:980,y:300,w:85,h:24},{x:1160,y:360,w:90,h:24},{x:1350,y:315,w:95,h:24},{x:1560,y:270,w:85,h:24},{x:1750,y:330,w:85,h:24},{x:1940,y:290,w:90,h:24},{x:2140,y:250,w:85,h:24},{x:2330,y:310,w:95,h:24},{x:2520,y:260,w:90,h:24}],
+      movingPlatforms:[{x:700,y:390,w:90,h:22,minX:640,maxX:930,vx:80},{x:1460,y:390,w:90,h:22,minX:1390,maxX:1710,vx:-95},{x:2050,y:360,w:100,h:22,minX:1980,maxX:2320,vx:110}],
+      pits:[{x:560,w:95},{x:1080,w:120},{x:1660,w:130},{x:2240,w:140}],
+      spikes:[{x:880,y:454,w:44,h:16},{x:1260,y:454,w:48,h:16},{x:1845,y:454,w:52,h:16},{x:2450,y:454,w:48,h:16}],
+      width:3000, flag:{x:2870,y:190,h:280},
+      enemies:[
+        {x:420,y:430,w:36,h:30,vx:-100,alive:true,type:'walker'},
+        {x:830,y:310,w:36,h:30,vx:90,alive:true,type:'jumper',jumpCd:1.2},
+        {x:1200,y:330,w:36,h:30,vx:-95,alive:true,type:'walker'},
+        {x:1520,y:240,w:36,h:30,vx:110,alive:true,type:'flyer',baseY:240,phase:0},
+        {x:1890,y:260,w:36,h:30,vx:-105,alive:true,type:'exploder'},
+        {x:2280,y:220,w:36,h:30,vx:100,alive:true,type:'jumper',jumpCd:0.8},
+        {x:2650,y:230,w:36,h:30,vx:-110,alive:true,type:'exploder'}
+      ],
+      coins:[[210,385],[360,335],[505,285],[655,245],[820,300],[1010,260],[1180,320],[1370,275],[1580,230],[1770,290],[1960,250],[2160,210],[2350,270],[2540,220],[2730,210]],
+      rewards:[[740,350],[1490,340],[2100,310],[2580,220]]
+    },
+    {
+      groundY:470,
+      platforms:[{x:200,y:420,w:70,h:24},{x:330,y:350,w:70,h:24},{x:450,y:290,w:70,h:24},{x:590,y:360,w:70,h:24},{x:760,y:300,w:70,h:24},{x:940,y:250,w:75,h:24},{x:1120,y:330,w:70,h:24},{x:1310,y:270,w:75,h:24},{x:1510,y:220,w:80,h:24},{x:1710,y:300,w:70,h:24},{x:1910,y:260,w:80,h:24},{x:2120,y:210,w:75,h:24},{x:2330,y:280,w:80,h:24},{x:2560,y:230,w:85,h:24}],
+      movingPlatforms:[{x:660,y:400,w:90,h:22,minX:600,maxX:880,vx:130},{x:1430,y:380,w:95,h:22,minX:1360,maxX:1710,vx:-145},{x:2230,y:360,w:105,h:22,minX:2140,maxX:2520,vx:160}],
+      pits:[{x:500,w:120},{x:980,w:140},{x:1610,w:150},{x:2380,w:160}],
+      spikes:[{x:830,y:454,w:54,h:16},{x:1210,y:454,w:58,h:16},{x:1835,y:454,w:60,h:16},{x:2640,y:454,w:60,h:16}],
+      width:3200, flag:{x:3060,y:180,h:290},
+      enemies:[
+        {x:380,y:430,w:36,h:30,vx:-120,alive:true,type:'walker'},
+        {x:740,y:280,w:36,h:30,vx:120,alive:true,type:'jumper',jumpCd:0.9},
+        {x:1090,y:300,w:36,h:30,vx:-120,alive:true,type:'walker'},
+        {x:1470,y:190,w:36,h:30,vx:130,alive:true,type:'flyer',baseY:190,phase:1.2},
+        {x:1760,y:270,w:36,h:30,vx:-120,alive:true,type:'exploder'},
+        {x:2140,y:180,w:36,h:30,vx:130,alive:true,type:'jumper',jumpCd:0.7},
+        {x:2470,y:250,w:36,h:30,vx:-125,alive:true,type:'exploder'},
+        {x:2840,y:200,w:36,h:30,vx:130,alive:true,type:'flyer',baseY:200,phase:0.3}
+      ],
+      coins:[[230,390],[350,320],[470,260],[610,330],[780,270],[960,220],[1140,300],[1330,240],[1530,190],[1730,270],[1930,230],[2140,180],[2350,250],[2580,200],[2810,190],[2990,160]],
+      rewards:[[690,360],[1520,340],[2280,320],[2890,210]]
+    },
+    {
+      groundY:470,
+      platforms:[{x:180,y:410,w:60,h:24},{x:300,y:340,w:60,h:24},{x:410,y:270,w:60,h:24},{x:530,y:340,w:60,h:24},{x:660,y:280,w:60,h:24},{x:800,y:220,w:60,h:24},{x:940,y:300,w:60,h:24},{x:1090,y:240,w:60,h:24},{x:1240,y:180,w:60,h:24},{x:1410,y:260,w:65,h:24},{x:1580,y:200,w:65,h:24},{x:1760,y:280,w:65,h:24},{x:1960,y:220,w:65,h:24},{x:2160,y:160,w:70,h:24},{x:2360,y:240,w:70,h:24},{x:2580,y:180,w:70,h:24},{x:2820,y:250,w:80,h:24}],
+      movingPlatforms:[{x:620,y:390,w:95,h:22,minX:560,maxX:900,vx:170},{x:1450,y:370,w:95,h:22,minX:1360,maxX:1800,vx:-185},{x:2320,y:340,w:115,h:22,minX:2200,maxX:2700,vx:200}],
+      pits:[{x:480,w:140},{x:980,w:170},{x:1700,w:180},{x:2480,w:180},{x:3010,w:120}],
+      spikes:[{x:760,y:454,w:66,h:16},{x:1320,y:454,w:66,h:16},{x:2060,y:454,w:70,h:16},{x:2860,y:454,w:72,h:16}],
+      width:3400, flag:{x:3260,y:165,h:305},
+      enemies:[
+        {x:340,y:320,w:36,h:30,vx:-140,alive:true,type:'walker'},
+        {x:700,y:250,w:36,h:30,vx:140,alive:true,type:'jumper',jumpCd:0.8},
+        {x:1020,y:210,w:36,h:30,vx:-140,alive:true,type:'exploder'},
+        {x:1380,y:170,w:36,h:30,vx:150,alive:true,type:'flyer',baseY:170,phase:2.1},
+        {x:1710,y:250,w:36,h:30,vx:-145,alive:true,type:'jumper',jumpCd:0.7},
+        {x:2090,y:130,w:36,h:30,vx:150,alive:true,type:'flyer',baseY:130,phase:0.5},
+        {x:2430,y:210,w:36,h:30,vx:-150,alive:true,type:'exploder'},
+        {x:2740,y:150,w:36,h:30,vx:155,alive:true,type:'jumper',jumpCd:0.6},
+        {x:3050,y:220,w:36,h:30,vx:-150,alive:true,type:'exploder'}
+      ],
+      coins:[[200,380],[320,310],[430,240],[550,310],[680,250],[820,190],[960,270],[1110,210],[1260,150],[1430,230],[1600,170],[1780,250],[1980,190],[2180,130],[2380,210],[2600,150],[2840,220],[3080,180]],
+      rewards:[[650,350],[1470,330],[2350,300],[2950,200]]
+    },
+    {
+      groundY:470,
+      platforms:[{x:170,y:400,w:55,h:24},{x:280,y:330,w:55,h:24},{x:390,y:260,w:55,h:24},{x:520,y:330,w:55,h:24},{x:640,y:250,w:55,h:24},{x:780,y:190,w:55,h:24},{x:920,y:280,w:55,h:24},{x:1060,y:210,w:55,h:24},{x:1200,y:150,w:55,h:24},{x:1360,y:240,w:58,h:24},{x:1530,y:170,w:58,h:24},{x:1710,y:250,w:58,h:24},{x:1900,y:180,w:60,h:24},{x:2100,y:130,w:65,h:24},{x:2310,y:220,w:65,h:24},{x:2530,y:160,w:65,h:24},{x:2770,y:230,w:70,h:24},{x:3020,y:170,w:70,h:24}],
+      movingPlatforms:[{x:600,y:390,w:100,h:22,minX:520,maxX:940,vx:210},{x:1440,y:360,w:100,h:22,minX:1320,maxX:1860,vx:-220},{x:2350,y:320,w:120,h:22,minX:2200,maxX:2860,vx:230}],
+      pits:[{x:450,w:170},{x:960,w:200},{x:1690,w:210},{x:2460,w:220},{x:3180,w:140}],
+      spikes:[{x:720,y:454,w:74,h:16},{x:1280,y:454,w:78,h:16},{x:2030,y:454,w:84,h:16},{x:2890,y:454,w:86,h:16}],
+      width:3600, flag:{x:3460,y:145,h:325},
+      enemies:[
+        {x:320,y:300,w:36,h:30,vx:-160,alive:true,type:'walker'},
+        {x:680,y:230,w:36,h:30,vx:165,alive:true,type:'jumper',jumpCd:0.65},
+        {x:980,y:190,w:36,h:30,vx:-165,alive:true,type:'exploder'},
+        {x:1320,y:150,w:36,h:30,vx:170,alive:true,type:'flyer',baseY:150,phase:2.5},
+        {x:1680,y:230,w:36,h:30,vx:-170,alive:true,type:'jumper',jumpCd:0.55},
+        {x:2050,y:110,w:36,h:30,vx:175,alive:true,type:'flyer',baseY:110,phase:1.3},
+        {x:2380,y:190,w:36,h:30,vx:-175,alive:true,type:'exploder'},
+        {x:2700,y:140,w:36,h:30,vx:180,alive:true,type:'jumper',jumpCd:0.5},
+        {x:3000,y:210,w:36,h:30,vx:-180,alive:true,type:'exploder'},
+        {x:3300,y:170,w:36,h:30,vx:180,alive:true,type:'flyer',baseY:170,phase:0.8}
+      ],
+      coins:[[190,370],[300,300],[410,230],[540,300],[660,220],[800,160],[940,250],[1080,180],[1220,120],[1380,210],[1550,140],[1730,220],[1920,150],[2120,100],[2330,190],[2550,130],[2790,200],[3040,150],[3320,150]],
+      rewards:[[620,340],[1490,320],[2380,280],[3100,190]],
+      bunnies:[
+        {x:520,y:438,w:26,h:22,vx:55,minX:470,maxX:760,alive:true},
+        {x:1460,y:438,w:26,h:22,vx:-60,minX:1320,maxX:1760,alive:true},
+        {x:2580,y:438,w:26,h:22,vx:65,minX:2440,maxX:2920,alive:true}
+      ],
+      vines:[
+        {x:980,y:120,h:180},
+        {x:1760,y:95,h:210},
+        {x:2870,y:110,h:190}
+      ]
+    }
+  ];
+
+  let levelIndex = 0;
+  let level;
+  let characterIndex = 0;
+  const selectedAbilityByChar = ['speed','jump'];
+  const characterThemes = [
+    // 1) Original
+    {name:'Original', hat:'#ff5a7a', hatHi:'#ff7f98', skin:'#ffe1c9', shirt:'#ff6f8e', overall:'#5f86ff'},
+    // 2) Girl
+    {name:'Girl', hat:'#ff78b8', hatHi:'#ffb1d6', skin:'#ffe6cf', shirt:'#ff9ac6', overall:'#7b8dff'}
+  ];
+  let player, enemies, coins, rewards, bunnies, vines, bunniesLost=0, explosions, diamondBursts, speedTrail, cameraX, score, lives, gameOver, win, speedBoostTimer=0, jumpBoostTimer=0, shieldTimer=0, invincibleTimer=0, girlFlyTimer=0, birdFlyTimer=0, specialActiveTimer=0, specialCooldown=0, monsterEatsLeft=0, mushroomUnlocked=false, boyTripleJumpUsed=false, jumpHeldLast=false;
+  let vineGrabbed = -1, vineAngle = 0, vineVel = 0;
+  let luckyDrawOpen=false, luckyMessage='', luckyTimer=0, nextLuckyDrawScore=3000, luckyDrawUsed=false;
+  let levelPlayTimer = 0;
+  let playerName = '';
+  let enteringName = true;
+  let showHomeScreen = false;
+  let showPetsScreen = false;
+  let showLeaderboardScreen = false;
+  let selectingCharacter = false;
+  let selectingDifficulty = false;
+  let scoreSavedThisRun = false;
+  let difficultyIndex = 1; // 0 Easy, 1 Normal, 2 Hard
+  const difficultyNames = ['Easy','Normal','Hard'];
+  const difficultyMult = [0.85, 1.0, 1.2];
+  let petUnlocked = false;
+  let petCollection = [];
+  let activePetName = '';
+  const petByPoints = [
+    {name:'Cat', minScore:100, color:'#ffd1a3'},
+    {name:'Dog', minScore:500, color:'#d2b48c'},
+    {name:'Sun Bunny', minScore:1000, color:'#ffe39a'},
+    {name:'Monkey', minScore:1500, color:'#c89b6f'},
+    {name:'Bird', minScore:2000, color:'#a9d7ff'},
+    {name:'Sky Fox', minScore:2200, color:'#9fe2ff'},
+    {name:'Star Cub', minScore:3200, color:'#d7b3ff'}
+  ];
+  let pet = {x:50,y:260,vx:0,vy:0,color:'#ffe39a'};
+
+  function getTopScores(){
+    try{ return JSON.parse(localStorage.getItem('mini_plumber_scores') || '[]'); }catch{ return []; }
+  }
+  function saveScoreEntry(){
+    if(scoreSavedThisRun || !playerName) return;
+    scoreSavedThisRun = true;
+    const arr = getTopScores();
+    arr.push({name:playerName, score:score});
+    arr.sort((a,b)=>b.score-a.score);
+    localStorage.setItem('mini_plumber_scores', JSON.stringify(arr.slice(0,3)));
+  }
+
+  function loadLevel(i){
+    levelIndex = i;
+    level = JSON.parse(JSON.stringify(levels[i]));
+
+    // Easy mode: only platforms + brown monsters
+    if(difficultyIndex===0){
+      level.pits = [];
+      level.spikes = [];
+      level.movingPlatforms = [];
+      level.vines = [];
+      level.bunnies = [];
+      level.enemies = (level.enemies || [])
+        .filter(e => e.type === 'walker')
+        .map(e => ({...e, type:'walker', vx: Math.sign(e.vx||1) * 90, alive:true}));
+    }
+
+    // Medium (Normal): remove spikes and all special monster types
+    if(difficultyIndex===1){
+      level.spikes = [];
+      level.enemies = (level.enemies || [])
+        .filter(e => e.type === 'walker')
+        .map(e => ({...e, type:'walker', alive:true}));
+    }
+
+    // Level 4: monsters same size as player
+    if(i===3){
+      level.enemies = (level.enemies || []).map(e => ({...e, w:34, h:48}));
+    }
+
+    enemies = level.enemies;
+    coins = level.coins.map(([x,y])=>({x,y,r:10,taken:false,bob:Math.random()*Math.PI*2}));
+    const rewardTypes = ['speed','jump','shield','rocket'];
+    rewards = level.rewards.map(([x,y],i)=>({x,y,r:11,type:rewardTypes[i%rewardTypes.length],taken:false,bob:Math.random()*Math.PI*2}));
+    const midPlat = level.platforms[Math.floor(level.platforms.length*0.55)] || {x:level.width*0.5,y:level.groundY-80,w:80};
+    rewards.push({x:midPlat.x + midPlat.w/2, y:midPlat.y - 34, r:12, type:'invincible', taken:false, bob:Math.random()*Math.PI*2});
+    if(i===0 && !mushroomUnlocked){ rewards.push({x:260,y:380,r:12,type:'mushroom',taken:false,bob:Math.random()*Math.PI*2}); }
+    bunnies = (level.bunnies || []).map(b => ({...b}));
+    vines = (level.vines || []).map(v => ({...v}));
+    levelPlayTimer = 0;
+  }
+
+  function reset(full=true){
+    if(full){ score=0; lives=3; bunniesLost=0; monsterEatsLeft=0; mushroomUnlocked=false; loadLevel(0); nextLuckyDrawScore = 3000; luckyDrawUsed = false; scoreSavedThisRun = false; showHomeScreen = !enteringName; showPetsScreen = false; showLeaderboardScreen = false; selectingCharacter = false; selectingDifficulty = false; }
+    player = {x:80,y:300,w:34,h:48,vx:0,vy:0,onGround:false,face:1,inv:0,jumpsUsed:0,maxJumps:2,rocketFuel:100};
+    pet = {x:player.x-26,y:player.y+8,vx:0,vy:0,color:pet.color || '#ffe39a'};
+    explosions = []; diamondBursts = []; speedTrail = []; speedBoostTimer = 0; jumpBoostTimer = 0; shieldTimer = 0; invincibleTimer = 0; girlFlyTimer = 0; birdFlyTimer = 0; specialActiveTimer = 0; specialCooldown = 0; boyTripleJumpUsed = false;
+    vineGrabbed = -1; vineAngle = 0; vineVel = 0;
+    luckyDrawOpen = false; luckyMessage=''; luckyTimer = 0;
+    cameraX=0; gameOver=false; win=false; jumpHeldLast=false;
+  }
+
+  function nextLevel(){
+    if(levelIndex < levels.length-1){
+      if(levelIndex === 2){
+        luckyMessage = 'Level 3 cleared! Earn more points to unlock pets.';
+        luckyTimer = 2.2;
+      }
+      loadLevel(levelIndex+1);
+      reset(false);
+      score += 800;
+      lives += 1; // reward: extra life for clearing a level
+      SFX.levelUp();
+    } else {
+      win = true;
+      lives += 1; // final clear reward life
+      SFX.win();
+    }
+  }
+
+  function syncPetByPoints(){
+    for(const p of petByPoints){
+      if(score >= p.minScore && !petCollection.includes(p.name)){
+        petCollection.push(p.name);
+        activePetName = p.name;
+        pet.color = p.color;
+        petUnlocked = true;
+        luckyMessage = `New Pet Unlocked: ${p.name}!`;
+        luckyTimer = Math.max(luckyTimer, 2.2);
+      }
+    }
+    if(!activePetName && petCollection.length) activePetName = petCollection[petCollection.length-1];
+  }
+
+  function runLuckyDraw(choice=null){
+    // random draw: 50% chance for +1 life
+    const randomChoices = ['life','life','score','rocket','allbuff','life'];
+    const pick = choice || randomChoices[Math.floor(Math.random()*randomChoices.length)];
+
+    if(pick==='speed'){ speedBoostTimer = Math.max(speedBoostTimer, 5); luckyMessage = 'Lucky Pick: Speed Boost 5s!'; }
+    else if(pick==='jump'){ jumpBoostTimer = Math.max(jumpBoostTimer, 5); luckyMessage = 'Lucky Pick: Triple Jump Buff 5s!'; }
+    else if(pick==='shield'){ shieldTimer = Math.max(shieldTimer, 5); luckyMessage = 'Lucky Pick: Shield 5s!'; }
+    else if(pick==='rocket'){ player.rocketFuel = 100; luckyMessage = 'Lucky Pick: Full Rocket Fuel!'; }
+    else if(pick==='life'){ lives += 1; luckyMessage = 'Lucky Pick: +1 Life!'; }
+    else if(pick==='score'){ score += 300; luckyMessage = 'Lucky Pick: +300 Score!'; }
+    else { speedBoostTimer = Math.max(speedBoostTimer,3); jumpBoostTimer = Math.max(jumpBoostTimer,3); shieldTimer = Math.max(shieldTimer,3); luckyMessage = 'Lucky Draw: All Buffs 3s!'; }
+
+    SFX.reward();
+    luckyDrawOpen = false;
+    luckyTimer = 2.2;
+    luckyDrawUsed = true;
+  }
+
+  function spawnDiamondBurst(x,y){ diamondBursts.push({x,y,t:0,d:2}); }
+  function rectHit(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+  function worldGroundAt(x){ for(const p of level.pits){ if(x>=p.x && x<=p.x+p.w) return H+999; } return level.groundY; }
+  function getAllSpikes(){
+    const extra = level.platforms
+      .filter((p, i) => i % 3 === 1 && p.w >= 70)
+      .map(p => ({x: p.x + 10, y: p.y - 16, w: Math.max(28, p.w - 20), h: 16}));
+    return [...level.spikes, ...extra];
+  }
+
+  function handlePlatforms(obj){
+    const all = [{x:0,y:level.groundY,w:level.width,h:80}, ...level.platforms, ...level.movingPlatforms];
+    obj.onGround=false;
+    for(const p of all){
+      if(obj.x+obj.w > p.x && obj.x < p.x+p.w){
+        const prevBottom = obj.y - obj.vy*(1/60) + obj.h;
+        const bottom = obj.y + obj.h;
+        if(prevBottom <= p.y+5 && bottom >= p.y && obj.vy >= 0){ obj.y = p.y-obj.h; obj.vy=0; obj.onGround=true; obj.jumpsUsed=0; }
+      }
+    }
+    const g = worldGroundAt(obj.x + obj.w/2);
+    if(obj.y+obj.h >= g && obj.vy>=0){ obj.y=g-obj.h; obj.vy=0; obj.onGround=true; obj.jumpsUsed=0; }
+  }
+
+  function hurt(){
+    if(player.inv>0 || invincibleTimer>0 || gameOver || win) return;
+    if(shieldTimer > 0){
+      shieldTimer = Math.max(0, shieldTimer - 1.2);
+      player.inv = 0.25;
+      SFX.hurt();
+      return;
+    }
+    lives--; player.inv=1.2; player.vx = -player.face * 260; player.vy = -420;
+    SFX.hurt();
+    if(lives<=0) gameOver=true;
+  }
+
+  function update(dt){
+    if(luckyTimer>0) luckyTimer -= dt;
+    if(gameOver || win){ saveScoreEntry(); return; }
+    if(enteringName || showHomeScreen || showPetsScreen || showLeaderboardScreen || selectingCharacter || selectingDifficulty) return;
+
+    if(score >= nextLuckyDrawScore && !luckyDrawOpen && !luckyDrawUsed){
+      luckyDrawOpen = true;
+      return;
+    }
+    if(luckyDrawOpen) return;
+
+    levelPlayTimer += dt;
+
+    const difficultyScale = (1 + levelIndex * 0.22) * difficultyMult[difficultyIndex];
+
+    level.movingPlatforms.forEach(p=>{ p.x += p.vx*dt*difficultyScale; if(p.x<p.minX){p.x=p.minX; p.vx*=-1;} if(p.x>p.maxX){p.x=p.maxX; p.vx*=-1;} });
+
+    const currentSpeed = SPEED * (speedBoostTimer > 0 ? 1.45 : 1);
+    if(keys.ArrowLeft){ player.vx -= currentSpeed*dt; player.face=-1; }
+    if(keys.ArrowRight){ player.vx += currentSpeed*dt; player.face=1; }
+
+    const jumpNow = !!(keys.Space || keys.KeyZ);
+
+    if(activePetName==='Monkey' && petUnlocked && levelIndex===levels.length-1){
+      if(vineGrabbed < 0 && keys.ArrowUp){
+        for(let i=0;i<vines.length;i++){
+          const v=vines[i];
+          const nearX = Math.abs((player.x+player.w/2)-v.x) < 26;
+          const withinY = (player.y+player.h) > v.y && player.y < (v.y+v.h);
+          if(nearX && withinY){ vineGrabbed = i; vineAngle = 0; vineVel = 0; break; }
+        }
+      }
+      if(vineGrabbed>=0 && (keys.ArrowDown || (jumpNow && !jumpHeldLast))){
+        player.vx = Math.sin(vineAngle) * 460;
+        player.vy = -180;
+        vineGrabbed = -1;
+      }
+    }
+
+    if(vineGrabbed < 0){
+      const boyExtraJumpAvailable = (characterIndex === 0 && !boyTripleJumpUsed) ? 1 : 0;
+      const jumpLimit = player.maxJumps + boyExtraJumpAvailable;
+      if(jumpNow && !jumpHeldLast && player.jumpsUsed < jumpLimit){
+        if(characterIndex === 0 && !boyTripleJumpUsed && player.jumpsUsed >= player.maxJumps){
+          boyTripleJumpUsed = true; // one bonus (triple) jump per level for boy
+        }
+        player.vy = -JUMP;
+        player.onGround=false;
+        player.jumpsUsed++;
+        SFX.jump();
+      }
+    }
+    jumpHeldLast = jumpNow;
+
+    // rocket launcher flight (hold X)
+    if((characterIndex === 1 && girlFlyTimer > 0) || birdFlyTimer > 0){
+      // Girl/Bird fly mode
+      if(keys.KeyX){
+        player.vy -= 1500 * dt;
+        speedTrail.push({x:player.x+player.w/2, y:player.y+player.h+2, t:0.15});
+      }
+      player.rocketFuel = Math.min(100, player.rocketFuel + 14 * dt);
+    } else if(keys.KeyX && player.rocketFuel > 0){
+      player.vy -= 1700 * dt;
+      player.rocketFuel = Math.max(0, player.rocketFuel - 28 * dt);
+      speedTrail.push({x:player.x+player.w/2, y:player.y+player.h+2, t:0.15});
+    } else {
+      player.rocketFuel = Math.min(100, player.rocketFuel + 10 * dt);
+    }
+
+    if(vineGrabbed >= 0){
+      const v = vines[vineGrabbed];
+      const push = (keys.ArrowRight?1:0) - (keys.ArrowLeft?1:0);
+      vineVel += push * 3.8 * dt;
+      vineVel += -Math.sin(vineAngle) * 6.0 * dt;
+      vineVel *= 0.992;
+      vineAngle = Math.max(-1.05, Math.min(1.05, vineAngle + vineVel));
+      const len = Math.min(v.h-6, 122);
+      player.x = v.x + Math.sin(vineAngle)*len - player.w/2;
+      player.y = v.y + Math.cos(vineAngle)*len - player.h/2;
+      player.vx = 0; player.vy = 0; player.onGround = false;
+    } else {
+      player.vx *= FRICTION; player.vy += G*dt;
+      player.x += player.vx*dt; player.y += player.vy*dt;
+
+      if(player.x<0) player.x=0;
+      if(player.x+player.w > level.width) player.x = level.width-player.w;
+
+      const wasOnGround = player.onGround;
+      handlePlatforms(player);
+      if(!wasOnGround && player.onGround && levelIndex===0){ SFX.grass(); }
+    }
+
+    for(const s of getAllSpikes()){ if(rectHit(player,s)){ hurt(); break; } }
+    if(player.y > H+140){ lives--; if(lives<=0) gameOver=true; else reset(false); return; }
+
+    enemies.forEach(e=>{
+      if(!e.alive) return;
+      if(e.type==='flyer'){ e.x += e.vx*dt*difficultyScale; e.phase=(e.phase||0)+dt*(4+levelIndex*0.8); e.y = e.baseY + Math.sin(e.phase)*28; }
+      else { e.vy=(e.vy||0)+G*dt*(1+levelIndex*0.06); e.x += e.vx*dt*difficultyScale; e.y += e.vy*dt; }
+
+      if(e.type==='jumper'){ e.jumpCd -= dt; if(e.onGround && e.jumpCd<=0){ e.vy=-700 - levelIndex*40; e.jumpCd=1.1 - levelIndex*0.15; } }
+
+      const edgeL=worldGroundAt(e.x+2), edgeR=worldGroundAt(e.x+e.w-2);
+      const nearEdge=(edgeL>level.groundY+20)||(edgeR>level.groundY+20);
+      if(e.type!=='flyer' && nearEdge) e.vx*=-1;
+
+      if(e.type!=='flyer'){
+        const blocks = [{x:0,y:level.groundY,w:level.width,h:80}, ...level.platforms, ...level.movingPlatforms];
+        e.onGround=false;
+        blocks.forEach(p=>{
+          if(e.x+e.w>p.x && e.x<p.x+p.w){
+            const prev=e.y - e.vy*(1/60)+e.h; const bot=e.y+e.h;
+            if(prev<=p.y+5 && bot>=p.y && e.vy>=0){ e.y=p.y-e.h; e.vy=0; e.onGround=true; }
+          }
+        });
+      }
+
+      if(e.x<0 || e.x+e.w>level.width) e.vx*=-1;
+
+      if(rectHit(player,e)){
+        const stomp = player.vy>0 && (player.y+player.h-8) < (e.y+10) && e.type!=='exploder';
+        if(monsterEatsLeft>0){
+          e.alive=false;
+          monsterEatsLeft--;
+          score += 220;
+          spawnDiamondBurst(e.x+e.w/2,e.y+e.h/2);
+          SFX.reward();
+        } else if(stomp){ e.alive=false; player.vy=-620; score += 180; spawnDiamondBurst(e.x+e.w/2,e.y+e.h/2); SFX.stomp(); }
+        else {
+          if(e.type==='exploder'){ e.alive=false; explosions.push({x:e.x+e.w/2,y:e.y+e.h/2,r:18,t:0.45}); spawnDiamondBurst(e.x+e.w/2,e.y+e.h/2); SFX.explode(); hurt(); }
+          else hurt();
+        }
+      }
+    });
+
+    // Level 4 bunnies: avoid touching them, keep them alive
+    bunnies.forEach(b=>{
+      if(!b.alive) return;
+      b.x += b.vx * dt * (1 + levelIndex*0.05);
+      if(b.x < b.minX){ b.x = b.minX; b.vx *= -1; }
+      if(b.x + b.w > b.maxX){ b.x = b.maxX - b.w; b.vx *= -1; }
+
+      if(rectHit(player,b)){
+        b.alive = false;
+        bunniesLost++;
+        score = Math.max(0, score - 150);
+        SFX.hurt();
+      }
+
+      for(const e of enemies){
+        if(e.alive && rectHit(e,b)){ b.alive=false; bunniesLost++; score=Math.max(0,score-120); break; }
+      }
+      for(const s of getAllSpikes()){
+        if(rectHit(b,s)){ b.alive=false; bunniesLost++; score=Math.max(0,score-120); break; }
+      }
+    });
+
+    if(petUnlocked && levelIndex===levels.length-1){
+      const tx = player.x - 26 + Math.sin(performance.now()*0.01)*8;
+      const ty = player.y + 8 + Math.sin(performance.now()*0.015)*5;
+      pet.x += (tx - pet.x) * Math.min(1, dt * 9);
+      pet.y += (ty - pet.y) * Math.min(1, dt * 9);
+    }
+
+    coins.forEach(c=>{ 
+      c.bob += dt*5; 
+      if(c.taken) return; 
+      const yy = c.y + Math.sin(c.bob)*4;
+      const hit={x:c.x-c.r,y:yy-c.r,w:c.r*2,h:c.r*2};
+      const petHit = (petUnlocked && levelIndex===levels.length-1) && (Math.hypot((pet.x+10)-c.x,(pet.y+10)-yy) < 22);
+      if(rectHit(player,hit) || petHit){ c.taken=true; score+=100; SFX.coin(); }
+    });
+    rewards.forEach(r=>{
+      r.bob += dt*6;
+      if(r.taken) return;
+      const hit={x:r.x-r.r,y:r.y-r.r+Math.sin(r.bob)*5,w:r.r*2,h:r.r*2};
+      if(rectHit(player,hit)){
+        r.taken=true;
+        if(r.type === 'speed') speedBoostTimer = 5;
+        if(r.type === 'jump') jumpBoostTimer = 5;
+        if(r.type === 'shield') shieldTimer = 5;
+        if(r.type === 'rocket') player.rocketFuel = Math.min(100, player.rocketFuel + 45);
+        if(r.type === 'invincible') invincibleTimer = 60;
+        if(r.type === 'mushroom'){ mushroomUnlocked = true; monsterEatsLeft = 2; }
+        score+=220;
+        SFX.reward();
+      }
+    });
+
+    explosions = explosions.filter(ex=>{ ex.t -= dt; ex.r += (220 + levelIndex*45)*dt; const dx=(player.x+player.w/2)-ex.x, dy=(player.y+player.h/2)-ex.y; if(ex.t>0 && (dx*dx+dy*dy) < ex.r*ex.r) hurt(); return ex.t>0; });
+    diamondBursts = diamondBursts.filter(d=>{ d.t += dt; return d.t < d.d; });
+
+    if(speedBoostTimer>0){ speedBoostTimer -= dt; speedTrail.push({x:player.x+player.w/2,y:player.y+player.h/2,t:0.22}); }
+    if(jumpBoostTimer>0){ jumpBoostTimer -= dt; }
+    if(shieldTimer>0){ shieldTimer -= dt; }
+    if(invincibleTimer>0){ invincibleTimer -= dt; }
+    if(girlFlyTimer>0) girlFlyTimer -= dt;
+    if(birdFlyTimer>0) birdFlyTimer -= dt;
+    if(specialActiveTimer>0) specialActiveTimer -= dt;
+    if(specialCooldown>0) specialCooldown -= dt;
+    player.maxJumps = jumpBoostTimer > 0 ? 3 : 2;
+    speedTrail = speedTrail.filter(s=>((s.t-=dt)>0));
+
+    if(player.x + player.w > level.flag.x){ nextLevel(); }
+
+    syncPetByPoints();
+
+    cameraX = Math.max(0, Math.min(level.width-W, player.x - W*0.35));
+    if(player.inv>0) player.inv -= dt;
+
+    const buffs = [];
+    if(speedBoostTimer>0) buffs.push('Speed');
+    if(jumpBoostTimer>0) buffs.push('Triple Jump');
+    if(shieldTimer>0) buffs.push('Shield');
+    if(invincibleTimer>0) buffs.push('Rainbow Invincible');
+    const bunnyInfo = levelIndex===3 ? ` | Bunnies Safe: ${bunnies.filter(b=>b.alive).length}/${bunnies.length}` : '';
+    const fuelInfo = ` | Fuel: ${Math.round(player.rocketFuel)}%`;
+    const ability = (activePetName==='Bird' && levelIndex===levels.length-1) ? 'Bird Fly(120s)' : (characterIndex===1 ? 'Girl Fly(10s)' : ({speed:'Speed Boost', jump:'Jump Boost', shield:'Shield'})[selectedAbilityByChar[characterIndex]]);
+    const activeTxt = birdFlyTimer>0 ? ` [ACTIVE ${birdFlyTimer.toFixed(1)}s]` : (characterIndex===1 && girlFlyTimer>0 ? ` [ACTIVE ${girlFlyTimer.toFixed(1)}s]` : '');
+    const specialInfo = ` | Ability: ${ability}${activeTxt}${specialCooldown>0 ? ` [CD ${specialCooldown.toFixed(1)}s]` : ' [READY]'}`;
+    const petState = petUnlocked ? (levelIndex===levels.length-1 ? activePetName : 'Stored (Last Level)') : 'LOCKED';
+    const petInfo = ` | Pet: ${petState} | Collection: ${petCollection.length}`;
+    const eatInfo = monsterEatsLeft>0 ? ` | Monster Bites: ${monsterEatsLeft}` : '';
+    const timeInfo = ` | Level Time: ${Math.floor(levelPlayTimer)}s/60s`;
+    hud.textContent = `Level: ${levelIndex+1}/4 | Diff: ${difficultyNames[difficultyIndex]} | Char: ${characterIndex+1} | Score: ${score} | Lives: ${lives}${timeInfo}${fuelInfo}${specialInfo}${petInfo}${eatInfo}${buffs.length ? ' | ' + buffs.join(' + ') : ''}${bunnyInfo}`;
+  }
+
+  function drawCloud(x,y,s){
+    ctx.fillStyle='rgba(255,255,255,0.95)';
+    ctx.beginPath(); ctx.arc(x,y,20*s,0,Math.PI*2); ctx.arc(x+18*s,y-10*s,24*s,0,Math.PI*2); ctx.arc(x+42*s,y,20*s,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,200,220,0.35)'; ctx.fillRect(x-8*s,y+10*s,56*s,6*s);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    const par = cameraX*0.25;
+
+    // level-themed background
+    if(levelIndex === 1){
+      // Level 2: volcano theme
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#ffb36b');
+      g.addColorStop(0.5,'#ff7f50');
+      g.addColorStop(1,'#4a2b1d');
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+
+      // volcano mountain
+      ctx.fillStyle = '#5b3526';
+      ctx.beginPath();
+      ctx.moveTo(120,470); ctx.lineTo(360,180); ctx.lineTo(600,470);
+      ctx.closePath(); ctx.fill();
+
+      // crater lava
+      ctx.fillStyle = '#ff4d2d';
+      ctx.fillRect(325,200,70,18);
+      ctx.fillStyle = 'rgba(255,230,120,0.85)';
+      ctx.fillRect(346,205,28,8);
+
+      // smoke clouds
+      drawCloud(170-par*0.2,120,0.9);
+      drawCloud(260-par*0.15,95,0.7);
+    } else if(levelIndex === 2){
+      // Level 3: night challenge
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#1b2650');
+      g.addColorStop(1,'#0b132f');
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#f6f2b6';
+      ctx.beginPath(); ctx.arc(120,90,26,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      for(let i=0;i<24;i++) ctx.fillRect(200+i*30-(par*0.2), 40 + (i%5)*18, 2, 2);
+      drawCloud(420-par,110,0.7);
+      drawCloud(760-par,85,0.65);
+    } else if(levelIndex === 3){
+      // Level 4: dynamic neon pattern
+      const t = performance.now()*0.0012;
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,`hsl(${(220+t*120)%360} 80% 18%)`);
+      g.addColorStop(1,`hsl(${(280+t*120)%360} 85% 10%)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+
+      for(let i=0;i<22;i++){
+        const x = (i*70 - (par*1.6)%160) % (W+180) - 80;
+        const y = 70 + (i%6)*55 + Math.sin(t*3+i)*14;
+        ctx.fillStyle = `hsla(${(i*27 + t*260)%360}, 95%, 60%, 0.28)`;
+        ctx.fillRect(x,y,100,16);
+      }
+    } else {
+      // Level 1: cute default
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#9fe8ff');
+      g.addColorStop(0.62,'#9fe8ff');
+      g.addColorStop(0.63,'#c9f7b8');
+      g.addColorStop(1,'#c9f7b8');
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+      drawCloud(130-par,95,1.1); drawCloud(420-par,140,0.9); drawCloud(760-par,90,1.0); drawCloud(1120-par,130,0.8);
+    }
+
+    ctx.save(); ctx.translate(-cameraX,0);
+
+    speedTrail.forEach(s=>{ ctx.fillStyle=`rgba(120,220,255,${Math.max(0,s.t/0.22)})`; ctx.fillRect(s.x-4,s.y-4,8,8); ctx.fillStyle=`rgba(255,255,120,${Math.max(0,s.t/0.22)})`; ctx.fillRect(s.x-2,s.y-2,4,4); });
+
+    const groundColor = levelIndex===1 ? '#5b3a2b' : (levelIndex===2 ? '#24305c' : (levelIndex===3 ? '#2a1a4d' : '#8dde72'));
+    const platColor = levelIndex===1 ? '#7a4a34' : (levelIndex===2 ? '#35508c' : (levelIndex===3 ? '#4d2f88' : '#63b85a'));
+    const platHi = levelIndex===1 ? '#b56d4a' : (levelIndex===2 ? '#6b8ed6' : (levelIndex===3 ? '#a58bff' : '#b9f59c'));
+    const moveColor = levelIndex===1 ? '#9a3f3f' : (levelIndex===2 ? '#6f59d1' : (levelIndex===3 ? '#9b4dff' : '#8b72ff'));
+    const moveHi = levelIndex===1 ? '#ff8f70' : (levelIndex===2 ? '#b6a8ff' : (levelIndex===3 ? '#e3d5ff' : '#c3b6ff'));
+    const pitColor = levelIndex===1 ? '#2a120b' : (levelIndex===2 ? '#0a122e' : (levelIndex===3 ? '#160a2c' : '#4d8f58'));
+
+    // richer terrain shading
+    const groundGrad = ctx.createLinearGradient(0,level.groundY,0,level.groundY+90);
+    groundGrad.addColorStop(0, groundColor);
+    groundGrad.addColorStop(1, '#1d1d2b');
+    ctx.fillStyle=groundGrad; ctx.fillRect(0,level.groundY,level.width,80);
+
+    ctx.fillStyle=platColor;
+    level.platforms.forEach(p=>{
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.fillStyle=platHi; ctx.fillRect(p.x+2,p.y+2,p.w-4,5);
+      ctx.fillStyle='rgba(255,255,255,0.18)'; ctx.fillRect(p.x+3,p.y+8,p.w-6,2);
+      ctx.fillStyle='rgba(0,0,0,0.22)'; ctx.fillRect(p.x+2,p.y+p.h-4,p.w-4,2);
+      ctx.fillStyle=platColor;
+    });
+
+    ctx.fillStyle=moveColor;
+    level.movingPlatforms.forEach(p=>{
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.fillStyle=moveHi; ctx.fillRect(p.x+2,p.y+2,p.w-4,5);
+      ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.fillRect(p.x+4,p.y+8,p.w-8,2);
+      ctx.fillStyle=moveColor;
+    });
+
+    ctx.fillStyle=pitColor; level.pits.forEach(p=>ctx.fillRect(p.x,level.groundY,p.w,90));
+
+    ctx.fillStyle='#ff6b6b';
+    getAllSpikes().forEach(s=>{ const n=Math.floor(s.w/11); for(let i=0;i<n;i++){ const x=s.x+i*11; ctx.beginPath(); ctx.moveTo(x,s.y+s.h); ctx.lineTo(x+5.5,s.y); ctx.lineTo(x+11,s.y+s.h); ctx.closePath(); ctx.fill(); } });
+
+    ctx.fillStyle='#8b8b8b'; ctx.fillRect(level.flag.x,level.flag.y,8,level.flag.h);
+    ctx.fillStyle='#ff4f4f'; ctx.beginPath(); ctx.moveTo(level.flag.x+8,level.flag.y+20); ctx.lineTo(level.flag.x+62,level.flag.y+40); ctx.lineTo(level.flag.x+8,level.flag.y+60); ctx.closePath(); ctx.fill();
+
+    coins.forEach(c=>{ 
+      if(c.taken) return; 
+      const yy=c.y+Math.sin(c.bob)*4;
+      const glow = ctx.createRadialGradient(c.x,yy,2,c.x,yy,c.r+6);
+      glow.addColorStop(0,'rgba(255,245,140,0.9)');
+      glow.addColorStop(1,'rgba(255,200,60,0)');
+      ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(c.x,yy,c.r+6,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#ffd84d'; ctx.beginPath(); ctx.arc(c.x,yy,c.r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='#fff3a8'; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.strokeStyle='#c7a62a'; ctx.lineWidth=1; ctx.stroke();
+    });
+    rewards.forEach(r=>{
+      if(r.taken) return;
+      const yy=r.y+Math.sin(r.bob)*5;
+      if(r.type==='speed') ctx.fillStyle='#6fe8ff';
+      else if(r.type==='jump') ctx.fillStyle='#c893ff';
+      else if(r.type==='shield') ctx.fillStyle='#7dffaf';
+      else if(r.type==='rocket') ctx.fillStyle='#ff9b5e';
+      else if(r.type==='mushroom') ctx.fillStyle='#62d86f';
+      else ctx.fillStyle=`hsl(${(performance.now()*0.18)%360} 90% 60%)`;
+      ctx.beginPath(); ctx.arc(r.x,yy,r.r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='#fff'; ctx.stroke();
+
+      // icon per blob
+      if(r.type==='speed'){
+        ctx.fillStyle='#ffe45e';
+        ctx.beginPath(); ctx.moveTo(r.x-2,yy-8); ctx.lineTo(r.x+3,yy-1); ctx.lineTo(r.x-1,yy-1); ctx.lineTo(r.x+2,yy+8); ctx.lineTo(r.x-4,yy+1); ctx.lineTo(r.x,yy+1); ctx.closePath(); ctx.fill();
+      } else if(r.type==='jump'){
+        ctx.fillStyle='#ffffff';
+        ctx.fillRect(r.x-5,yy+1,10,2);
+        ctx.fillRect(r.x-1,yy-6,2,7);
+      } else if(r.type==='shield'){
+        ctx.fillStyle='#ffffff';
+        ctx.beginPath(); ctx.arc(r.x,yy,4,Math.PI,0); ctx.lineTo(r.x+4,yy+5); ctx.lineTo(r.x-4,yy+5); ctx.closePath(); ctx.fill();
+      } else if(r.type==='rocket') {
+        // rocket icon
+        ctx.fillStyle='#fff';
+        ctx.fillRect(r.x-2,yy-6,4,9);
+        ctx.fillStyle='#ffd166';
+        ctx.fillRect(r.x-1,yy+3,2,3);
+      } else if(r.type==='mushroom') {
+        // mushroom icon
+        ctx.fillStyle='#ffffff';
+        ctx.fillRect(r.x-3,yy,6,5);
+        ctx.fillStyle='#2fac3b';
+        ctx.beginPath(); ctx.arc(r.x,yy-2,6,Math.PI,0); ctx.lineTo(r.x+6,yy-2); ctx.closePath(); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.fillRect(r.x-4,yy-5,2,2); ctx.fillRect(r.x+2,yy-6,2,2);
+      } else {
+        // rainbow invincible star
+        ctx.fillStyle='#fff';
+        ctx.beginPath();
+        ctx.moveTo(r.x,yy-7); ctx.lineTo(r.x+2,yy-2); ctx.lineTo(r.x+7,yy-2);
+        ctx.lineTo(r.x+3,yy+1); ctx.lineTo(r.x+5,yy+7); ctx.lineTo(r.x,yy+3);
+        ctx.lineTo(r.x-5,yy+7); ctx.lineTo(r.x-3,yy+1); ctx.lineTo(r.x-7,yy-2); ctx.lineTo(r.x-2,yy-2);
+        ctx.closePath(); ctx.fill();
+      }
+    });
+
+    vines.forEach(v=>{
+      ctx.strokeStyle='#4caf50';
+      ctx.lineWidth=4;
+      ctx.beginPath();
+      ctx.moveTo(v.x, v.y);
+      ctx.lineTo(v.x, v.y+v.h);
+      ctx.stroke();
+      for(let yy=v.y+12; yy<v.y+v.h; yy+=20){
+        ctx.fillStyle='#66bb6a';
+        ctx.fillRect(v.x-6,yy,5,3);
+        ctx.fillRect(v.x+1,yy+6,5,3);
+      }
+    });
+
+    bunnies.forEach(b=>{
+      if(!b.alive) return;
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(b.x+5,b.y+8,14,10);
+      ctx.fillRect(b.x+9,b.y+2,4,8);
+      ctx.fillRect(b.x+14,b.y+1,4,9);
+      ctx.fillStyle='#ffb6c1';
+      ctx.fillRect(b.x+10,b.y+3,1,4);
+      ctx.fillRect(b.x+15,b.y+2,1,5);
+      ctx.fillStyle='#111';
+      ctx.fillRect(b.x+16,b.y+10,2,2);
+      ctx.fillRect(b.x+20,b.y+13,3,2);
+    });
+
+    enemies.forEach(e=>{
+      if(!e.alive) return;
+
+      if(e.type==='walker'){
+        // brown blob (round + smile)
+        ctx.fillStyle='#a76b3f';
+        ctx.fillRect(e.x+2,e.y+2,e.w-4,e.h-4);
+        ctx.fillRect(e.x,e.y+6,e.w,e.h-10);
+        ctx.fillStyle='#fff';
+        ctx.fillRect(e.x+7,e.y+8,6,6); ctx.fillRect(e.x+23,e.y+8,6,6);
+        ctx.fillStyle='#111';
+        ctx.fillRect(e.x+9,e.y+10,2,2); ctx.fillRect(e.x+25,e.y+10,2,2);
+        ctx.fillStyle='#ffb3b3';
+        ctx.fillRect(e.x+5,e.y+16,3,2); ctx.fillRect(e.x+28,e.y+16,3,2);
+        ctx.fillStyle='#5a2f1a';
+        ctx.fillRect(e.x+15,e.y+18,6,2);
+      } else if(e.type==='jumper'){
+        // green frog-like monster
+        ctx.fillStyle='#59a14f';
+        ctx.fillRect(e.x+2,e.y+6,e.w-4,e.h-8);
+        ctx.fillRect(e.x+8,e.y+2,8,6);
+        ctx.fillRect(e.x+20,e.y+2,8,6);
+        ctx.fillStyle='#d8ffd0';
+        ctx.fillRect(e.x+9,e.y+3,4,3); ctx.fillRect(e.x+21,e.y+3,4,3);
+        ctx.fillStyle='#111';
+        ctx.fillRect(e.x+10,e.y+4,1,1); ctx.fillRect(e.x+22,e.y+4,1,1);
+        ctx.fillStyle='#3d7d37';
+        ctx.fillRect(e.x+6,e.y+22,8,4); ctx.fillRect(e.x+22,e.y+22,8,4);
+      } else if(e.type==='flyer'){
+        // purple bat-like flyer
+        ctx.fillStyle='#8e7bff';
+        ctx.fillRect(e.x+10,e.y+8,16,14);
+        ctx.fillStyle='#d8d2ff';
+        ctx.fillRect(e.x-4,e.y+8,10,8);
+        ctx.fillRect(e.x+e.w-6,e.y+8,10,8);
+        ctx.fillStyle='#fff';
+        ctx.fillRect(e.x+13,e.y+11,3,3); ctx.fillRect(e.x+20,e.y+11,3,3);
+        ctx.fillStyle='#111';
+        ctx.fillRect(e.x+14,e.y+12,1,1); ctx.fillRect(e.x+21,e.y+12,1,1);
+      } else {
+        // orange bomb monster (exploder)
+        ctx.fillStyle='#ff7f3f';
+        ctx.fillRect(e.x+4,e.y+4,e.w-8,e.h-8);
+        ctx.fillStyle='#c2511f';
+        ctx.fillRect(e.x+14,e.y+1,8,4); // fuse base
+        ctx.fillStyle='#ffd54d';
+        ctx.fillRect(e.x+17,e.y-2,2,4); // fuse spark
+        ctx.fillStyle='#fff';
+        ctx.fillRect(e.x+10,e.y+11,4,4); ctx.fillRect(e.x+22,e.y+11,4,4);
+        ctx.fillStyle='#111';
+        ctx.fillRect(e.x+11,e.y+12,2,2); ctx.fillRect(e.x+23,e.y+12,2,2);
+      }
+    });
+
+    explosions.forEach(ex=>{ const a=Math.max(0, ex.t/0.45); ctx.strokeStyle=`rgba(255,120,0,${a})`; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(ex.x,ex.y,ex.r,0,Math.PI*2); ctx.stroke(); });
+    diamondBursts.forEach(d=>{
+      const p = d.t / d.d;
+      const size = 8 + p * 92;
+      const alpha = Math.max(0, 0.45 * (1-p));
+      const c = `hsla(${(280 + p*120)%360}, 90%, 78%, ${alpha})`;
+      for(let i=0;i<4;i++){
+        const s = size * (0.45 + i*0.28);
+        ctx.strokeStyle = c;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(d.x, d.y - s);
+        ctx.lineTo(d.x + s*0.8, d.y);
+        ctx.lineTo(d.x, d.y + s);
+        ctx.lineTo(d.x - s*0.8, d.y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    });
+
+    const blink = player.inv>0 && Math.floor(player.inv*16)%2===0;
+    if(!blink){
+      ctx.save();
+      ctx.shadowColor='rgba(0,0,0,0.3)';
+      ctx.shadowBlur=10;
+      const px=player.x, py=player.y, moving=Math.abs(player.vx)>40, walk=Math.sin(performance.now()*0.02)*(moving?2.5:0), facing=player.face>=0?1:-1;
+      const theme = characterThemes[characterIndex];
+
+      if(invincibleTimer>0){
+        const pulse = 30 + Math.sin(performance.now()*0.012)*4;
+        const hue = (performance.now()*0.18)%360;
+        ctx.fillStyle = `hsla(${hue}, 95%, 65%, 0.18)`;
+        ctx.beginPath();
+        ctx.arc(px+17, py+24, pulse, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = `hsla(${(hue+40)%360}, 100%, 80%, 0.5)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px+17, py+24, pulse-2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+      ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.beginPath(); ctx.ellipse(px+17,py+49,13,3.5,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=theme.hat; ctx.fillRect(px+4,py+2,26,8); ctx.fillRect(px+2,py+9,30,4); ctx.fillStyle=theme.hatHi; ctx.fillRect(px+6,py+3,12,2);
+      ctx.fillStyle=theme.skin; ctx.fillRect(px+8,py+13,18,12); ctx.fillStyle='#ff9fb3'; ctx.fillRect(px+9,py+20,3,2); ctx.fillRect(px+22,py+20,3,2);
+      ctx.fillStyle='#5a341f'; ctx.fillRect(px+(facing>0?8:20),py+15,3,4); ctx.fillRect(px+11,py+21,12,3);
+      ctx.fillStyle='#111'; if(facing>0) ctx.fillRect(px+19,py+16,2,3); else ctx.fillRect(px+13,py+16,2,3);
+
+      if(monsterEatsLeft>0){
+        // green mushroom cap with white spots
+        ctx.fillStyle='#35b44a';
+        ctx.beginPath(); ctx.arc(px+17,py+8,12,Math.PI,0); ctx.lineTo(px+29,py+8); ctx.closePath(); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.fillRect(px+12,py+3,3,3); ctx.fillRect(px+19,py+2,3,3); ctx.fillRect(px+24,py+5,2,2);
+      }
+
+      if(characterIndex===0){
+        // Boy: stronger overalls + moustache
+        ctx.fillStyle='#3a2417';
+        ctx.fillRect(px+13,py+18,8,2); // moustache
+        ctx.fillStyle=theme.shirt; ctx.fillRect(px+7,py+25,20,10);
+        ctx.fillStyle=theme.overall; ctx.fillRect(px+8,py+35,18,10); ctx.fillRect(px+10,py+28,4,7); ctx.fillRect(px+20,py+28,4,7);
+      } else {
+        // Girl: longer hair + dress style body
+        ctx.fillStyle='#7a4a2b';
+        ctx.fillRect(px+6,py+14,3,14); ctx.fillRect(px+25,py+14,3,14); // side hair
+        ctx.fillStyle=theme.shirt; ctx.fillRect(px+7,py+25,20,8);
+        ctx.fillStyle=theme.overall; ctx.fillRect(px+6,py+33,22,12); // skirt/dress silhouette
+        ctx.fillStyle='#ffd6ea';
+        ctx.fillRect(px+9,py+36,16,2);
+      }
+      ctx.fillStyle='#f7d25a'; ctx.fillRect(px+11,py+31,1,1); ctx.fillRect(px+21,py+31,1,1);
+      if(characterIndex===0){
+        ctx.fillStyle='#d53b3b'; ctx.fillRect(px+4,py+27,4,8); ctx.fillRect(px+26,py+27,4,8);
+        ctx.fillStyle='#f5f5f5'; ctx.fillRect(px+3,py+33,4,3); ctx.fillRect(px+27,py+33,4,3);
+        ctx.fillStyle='#254ab0'; ctx.fillRect(px+10,py+44,6,4+walk); ctx.fillRect(px+18,py+44,6,4-walk);
+        ctx.fillStyle='#6b3f2a'; ctx.fillRect(px+8,py+47+walk,10,3); ctx.fillRect(px+17,py+47-walk,10,3);
+      } else {
+        ctx.fillStyle='#ff77aa'; ctx.fillRect(px+4,py+27,4,8); ctx.fillRect(px+26,py+27,4,8);
+        ctx.fillStyle='#fff0f7'; ctx.fillRect(px+3,py+33,4,3); ctx.fillRect(px+27,py+33,4,3);
+        ctx.fillStyle='#7b5cd6'; ctx.fillRect(px+10,py+44,6,4+walk); ctx.fillRect(px+18,py+44,6,4-walk);
+        ctx.fillStyle='#8a4f39'; ctx.fillRect(px+8,py+47+walk,10,3); ctx.fillRect(px+17,py+47-walk,10,3);
+      }
+      ctx.restore();
+    }
+
+    if(petUnlocked && levelIndex===levels.length-1){
+      ctx.fillStyle='rgba(0,0,0,0.2)';
+      ctx.beginPath(); ctx.ellipse(pet.x+10, pet.y+18, 8, 2.5, 0, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle=pet.color || '#ffe39a';
+      ctx.fillRect(pet.x+2, pet.y+6, 16, 10);
+      ctx.fillRect(pet.x+6, pet.y+2, 4, 6);
+      ctx.fillRect(pet.x+11, pet.y+1, 4, 7);
+      ctx.fillStyle='#111';
+      ctx.fillRect(pet.x+12, pet.y+9, 2, 2);
+      ctx.fillStyle='#ff9ea6';
+      ctx.fillRect(pet.x+16, pet.y+12, 2, 2);
+    }
+
+    ctx.restore();
+
+    if(enteringName){
+      ctx.fillStyle='rgba(7,23,66,0.92)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 48px sans-serif';
+      ctx.fillText('Enter Your Nickname', W/2, H/2 - 70);
+      ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(W/2-220,H/2-20,440,62);
+      ctx.fillStyle='#fff'; ctx.font='bold 34px sans-serif';
+      const cursor = Math.floor(performance.now()/500)%2===0 ? '|' : '';
+      ctx.fillText((playerName || '') + cursor, W/2, H/2 + 23);
+      ctx.font='20px sans-serif';
+      ctx.fillText('Type name, then press ENTER', W/2, H/2 + 78);
+    } else if(showHomeScreen){
+      ctx.fillStyle='rgba(7,23,66,0.82)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 54px sans-serif';
+      ctx.fillText(`Mario Adventure - ${playerName}`, W/2, H/2 - 120);
+
+      // running character background animation
+      const rx = ((performance.now()*0.22) % (W+80)) - 40;
+      const ry = H - 130;
+      const leg = Math.sin(performance.now()*0.025)*4;
+      ctx.fillStyle='rgba(255,255,255,0.9)';
+      ctx.fillRect(rx, ry, 34, 48);
+      ctx.fillStyle='#ff5a7a'; ctx.fillRect(rx+4,ry+2,26,8);
+      ctx.fillStyle='#5f86ff'; ctx.fillRect(rx+8,ry+24,18,14);
+      ctx.fillStyle='#254ab0'; ctx.fillRect(rx+10,ry+40,6,6+leg); ctx.fillRect(rx+18,ry+40,6,6-leg);
+
+      const playBtn = {x: W/2-120, y: H/2+20, w:240, h:52};
+      const petsBtn = {x: W/2-120, y: H/2+84, w:240, h:52};
+      const leadBtn = {x: W/2-120, y: H/2+148, w:240, h:52};
+      ctx.fillStyle='#ffd54d'; ctx.fillRect(playBtn.x, playBtn.y, playBtn.w, playBtn.h);
+      ctx.fillStyle='#111'; ctx.font='bold 32px sans-serif'; ctx.fillText('PLAY', W/2, playBtn.y+36);
+      ctx.fillStyle='#9fd3ff'; ctx.fillRect(petsBtn.x, petsBtn.y, petsBtn.w, petsBtn.h);
+      ctx.fillStyle='#111'; ctx.font='bold 27px sans-serif'; ctx.fillText('PETS', W/2, petsBtn.y+35);
+      ctx.fillStyle='#c2b7ff'; ctx.fillRect(leadBtn.x, leadBtn.y, leadBtn.w, leadBtn.h);
+      ctx.fillStyle='#111'; ctx.font='bold 26px sans-serif'; ctx.fillText('LEADERBOARD', W/2, leadBtn.y+35);
+    } else if(showPetsScreen){
+      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 44px sans-serif';
+      ctx.fillText('Your Pets', W/2, 130);
+      const list = petCollection.length ? petCollection : ['(No pets yet)'];
+      ctx.font='bold 28px sans-serif';
+      list.slice(0,8).forEach((name,idx)=>{
+        const y = 200 + idx*44;
+        ctx.fillStyle = (name===activePetName) ? '#ffd54d' : '#e8f0ff';
+        ctx.fillText(name, W/2, y);
+      });
+      ctx.fillStyle='#fff'; ctx.font='20px sans-serif';
+      ctx.fillText('Press B / ESC / ENTER to return', W/2, H-70);
+    } else if(showLeaderboardScreen){
+      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 44px sans-serif';
+      ctx.fillText('Leaderboard', W/2, 120);
+      const top = getTopScores();
+      const rows = [top[0],top[1],top[2]];
+      ctx.font='bold 30px sans-serif';
+      rows.forEach((r,i)=>{
+        const y = 210 + i*70;
+        ctx.fillStyle = i===0 ? '#ffd54d' : '#e8f0ff';
+        const text = r ? `${i+1}. ${r.name} - ${r.score}` : `${i+1}. ---`;
+        ctx.fillText(text, W/2, y);
+      });
+      ctx.fillStyle='#fff'; ctx.font='20px sans-serif';
+      ctx.fillText('Press B / ESC / ENTER to return', W/2, H-70);
+    } else if(selectingCharacter){
+      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 42px sans-serif';
+      ctx.fillText('Choose Your Character', W/2, H/2 - 110);
+
+      const leftX = W/2 - 180, rightX = W/2 + 80, y = H/2 - 50;
+      const names = ['Original (Boy)','Girl'];
+      [leftX,rightX].forEach((x,i)=>{
+        ctx.fillStyle = (characterIndex===i) ? '#ffd54d' : 'rgba(255,255,255,0.85)';
+        ctx.fillRect(x-16,y-16,120,155);
+        const t = characterThemes[i];
+        ctx.fillStyle=t.hat; ctx.fillRect(x+20,y+8,50,12);
+        ctx.fillStyle=t.skin; ctx.fillRect(x+28,y+24,34,22);
+        ctx.fillStyle=t.shirt; ctx.fillRect(x+25,y+48,40,20);
+        ctx.fillStyle=t.overall; ctx.fillRect(x+27,y+69,36,28);
+        ctx.fillStyle='#111'; ctx.font='bold 18px sans-serif';
+        ctx.fillText(names[i], x+44, y+125);
+      });
+      ctx.fillStyle='#fff'; ctx.font='22px sans-serif';
+      ctx.fillText('Press C to switch selection', W/2, H/2 + 140);
+      ctx.fillText('Press ENTER / SPACE to start game', W/2, H/2 + 172);
+    } else if(selectingDifficulty){
+      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 42px sans-serif';
+      ctx.fillText('Choose Difficulty', W/2, H/2 - 80);
+      for(let i=0;i<3;i++){
+        const x = W/2 - 220 + i*220;
+        ctx.fillStyle = (difficultyIndex===i) ? '#ffd54d' : 'rgba(255,255,255,0.85)';
+        ctx.fillRect(x, H/2-30, 160, 70);
+        ctx.fillStyle = '#111';
+        ctx.font='bold 28px sans-serif';
+        ctx.fillText(difficultyNames[i], x+80, H/2+16);
+      }
+      ctx.fillStyle='#fff'; ctx.font='22px sans-serif';
+      ctx.fillText('← / → or 1 / 2 / 3 to choose', W/2, H/2 + 110);
+      ctx.fillText('ENTER / SPACE for character selection', W/2, H/2 + 142);
+    } else if(luckyDrawOpen){
+      ctx.fillStyle='rgba(0,0,0,0.60)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fff'; ctx.font='bold 42px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('🎁 Lucky Draw / Lucky Pick', W/2, H/2 - 70);
+      ctx.font='22px sans-serif';
+      ctx.fillText('You reached 3000 score milestone', W/2, H/2 - 34);
+      ctx.fillText('Pick any boost: 1 Speed  2 Jump  3 Shield  4 Rocket', W/2, H/2 + 4);
+      ctx.fillText('Or pick reward: 5 +Life  6 +Score   (SPACE=Random)', W/2, H/2 + 38);
+    } else if(luckyTimer>0){
+      ctx.fillStyle='rgba(0,0,0,0.4)';
+      ctx.fillRect(W/2-230,30,460,52);
+      ctx.fillStyle='#fff';
+      ctx.font='bold 24px sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText(luckyMessage, W/2, 64);
+    }
+
+    if(win || gameOver){
+      ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fff'; ctx.font='bold 54px sans-serif'; ctx.textAlign='center';
+      ctx.fillText(win ? 'All 4 Levels Cleared!' : 'Game Over', W/2, H/2 - 20);
+      ctx.font='28px sans-serif'; ctx.fillText('Press R to restart', W/2, H/2 + 35);
+    }
+  }
+
+  let last = performance.now();
+  function loop(t){ const dt=Math.min(0.033,(t-last)/1000); last=t; update(dt); draw(); requestAnimationFrame(loop); }
+  reset(true); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
+
