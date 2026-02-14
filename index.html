@@ -153,15 +153,7 @@
 
     if(showHomeScreen){
       if(e.code==='Enter' || e.code==='Space'){ showHomeScreen = false; selectingDifficulty = true; }
-      if(e.code==='KeyP'){ showHomeScreen = false; showPetsScreen = true; }
       if(e.code==='KeyL'){ showHomeScreen = false; showLeaderboardScreen = true; }
-      return;
-    }
-
-    if(showPetsScreen){
-      if(e.code==='Escape' || e.code==='KeyB' || e.code==='Enter' || e.code==='Space'){
-        showPetsScreen = false; showHomeScreen = true;
-      }
       return;
     }
 
@@ -197,14 +189,8 @@
       if(!win) nextLevel();
       return;
     }
-    // Character superpowers removed (Boy/Girl). KeyF no longer triggers character abilities.
-    if (e.code === 'KeyF' && specialCooldown <= 0){
-      if(activePetName === 'Bird' && levelIndex===levels.length-1){
-        birdFlyTimer = 120;
-        specialCooldown = 18;
-        SFX.reward();
-      }
-    }
+    // Character and pet superpowers removed.
+
   });
   addEventListener('keyup', e => keys[e.code] = false);
 
@@ -223,7 +209,6 @@
           return;
         }
         if(showHomeScreen){ showHomeScreen=false; selectingDifficulty=true; return; }
-        if(showPetsScreen){ showPetsScreen=false; showHomeScreen=true; return; }
         if(showLeaderboardScreen){ showLeaderboardScreen=false; showHomeScreen=true; return; }
         if(selectingDifficulty){ selectingDifficulty=false; selectingCharacter=true; return; }
         if(selectingCharacter){ selectingCharacter=false; return; }
@@ -270,13 +255,11 @@
     const sx = canvas.width / r.width, sy = canvas.height / r.height;
     const x = (e.clientX - r.left) * sx, y = (e.clientY - r.top) * sy;
 
-    const playBtn = {x: W/2-120, y: H/2+20, w:240, h:52};
-    const petsBtn = {x: W/2-120, y: H/2+84, w:240, h:52};
-    const leadBtn = {x: W/2-120, y: H/2+148, w:240, h:52};
+    const playBtn = {x: W/2-140, y: H/2+32, w:280, h:56};
+    const leadBtn = {x: W/2-140, y: H/2+106, w:280, h:56};
     const inBtn = b => x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h;
 
     if(inBtn(playBtn)){ showHomeScreen=false; selectingDifficulty=true; }
-    else if(inBtn(petsBtn)){ showHomeScreen=false; showPetsScreen=true; }
     else if(inBtn(leadBtn)){ showHomeScreen=false; showLeaderboardScreen=true; }
   });
 
@@ -375,6 +358,80 @@
     }
   ];
 
+  const generatedThemes = ['robot','flower','candy','forest','space'];
+
+  function generateLevel(idx){
+    const theme = generatedThemes[(idx-4) % generatedThemes.length];
+    const difficultyBoost = Math.max(0, idx-3);
+    const width = 3200 + Math.min(2200, difficultyBoost * 130);
+    const groundY = 470;
+
+    const platforms = [];
+    const platformCount = 14 + Math.min(10, Math.floor(difficultyBoost * 0.8));
+    let px = 170;
+    for(let i=0;i<platformCount;i++){
+      px += 120 + (i%3)*35 + Math.random()*40;
+      const py = 180 + (i%5)*55 + (Math.random()*22-11);
+      const pw = 58 + (i%4)*10;
+      platforms.push({x:px, y:Math.min(430,py), w:pw, h:24});
+    }
+
+    const movingPlatforms = [];
+    const mvCount = 2 + Math.min(4, Math.floor(difficultyBoost/2));
+    for(let i=0;i<mvCount;i++){
+      const x = 600 + i*520;
+      movingPlatforms.push({x,y:360-(i%3)*40,w:95,h:22,minX:x-120,maxX:x+220,vx:(i%2?1:-1)*(120+difficultyBoost*6)});
+    }
+
+    const pits = [];
+    const pitCount = 3 + Math.min(5, Math.floor(difficultyBoost/2));
+    for(let i=0;i<pitCount;i++) pits.push({x:540+i*430+(i%2)*80,w:120+Math.min(90,difficultyBoost*6)});
+
+    const spikes = [];
+    const spikeCount = 3 + Math.min(6, Math.floor(difficultyBoost/2));
+    for(let i=0;i<spikeCount;i++) spikes.push({x:840+i*360,y:454,w:48+((i%3)*8),h:16});
+
+    const enemies = [];
+    const enemyCount = 8 + Math.min(16, difficultyBoost*2);
+    const themeTypes = theme==='robot' ? ['walker','exploder','flyer'] : theme==='flower' ? ['jumper','walker','flyer'] : theme==='forest' ? ['walker','jumper','flyer','exploder'] : theme==='candy' ? ['walker','flyer','exploder','jumper'] : theme==='space' ? ['flyer','exploder','jumper'] : ['walker','jumper','exploder'];
+    for(let i=0;i<enemyCount;i++){
+      const type = themeTypes[i % themeTypes.length];
+      const ex = 360 + i*170;
+      const isForestTree = theme==='forest' && type!=='flyer' && type!=='exploder';
+      const base = {x:ex,y: type==='flyer'?220: (isForestTree?398:430),w:isForestTree?42:36,h:isForestTree?62:30,vx:(i%2?1:-1)*(100+difficultyBoost*5),alive:true,type};
+      if(type==='jumper') base.jumpCd = Math.max(0.45, 1.1 - difficultyBoost*0.03);
+      if(type==='flyer'){
+        base.baseY = 170 + (i%4)*25; base.phase = i*0.7;
+        if(theme==='forest') base.variant = (i%2===0?'bird':'pixie');
+        if(theme==='candy') base.variant = 'gummyBear';
+      }
+      if(theme==='candy' && type==='exploder') base.variant = 'gummyWorm';
+      enemies.push(base);
+    }
+
+    const coins = [];
+    for(let i=0;i<20;i++) coins.push([220+i*150, 170 + (i%5)*45]);
+
+    const rewards = [];
+    for(let i=0;i<5;i++) rewards.push([680+i*620, 320-(i%3)*44]);
+
+    return {
+      theme,
+      groundY,
+      platforms,
+      movingPlatforms,
+      pits,
+      spikes,
+      width,
+      flag:{x:width-140,y:160,h:310},
+      enemies,
+      coins,
+      rewards,
+      bunnies:[],
+      vines:[]
+    };
+  }
+
   let levelIndex = 0;
   let level;
   let characterIndex = 0;
@@ -385,14 +442,13 @@
     // 2) Girl
     {name:'Girl', hat:'#ff78b8', hatHi:'#ffb1d6', skin:'#ffe6cf', shirt:'#ff9ac6', overall:'#7b8dff'}
   ];
-  let player, enemies, coins, rewards, bunnies, vines, bunniesLost=0, explosions, diamondBursts, speedTrail, cameraX, score, lives, gameOver, win, speedBoostTimer=0, jumpBoostTimer=0, shieldTimer=0, invincibleTimer=0, girlFlyTimer=0, birdFlyTimer=0, specialActiveTimer=0, specialCooldown=0, monsterEatsLeft=0, mushroomUnlocked=false, boyTripleJumpUsed=false, jumpHeldLast=false;
+  let player, enemies, coins, rewards, bunnies, vines, bunniesLost=0, explosions, diamondBursts, speedTrail, cameraX, score, lives, gameOver, win, speedBoostTimer=0, jumpBoostTimer=0, shieldTimer=0, invincibleTimer=0, specialActiveTimer=0, specialCooldown=0, monsterEatsLeft=0, mushroomUnlocked=false, boyTripleJumpUsed=false, jumpHeldLast=false;
   let vineGrabbed = -1, vineAngle = 0, vineVel = 0;
   let luckyDrawOpen=false, luckyMessage='', luckyTimer=0, nextLuckyDrawScore=3000, luckyDrawUsed=false;
   let levelPlayTimer = 0;
   let playerName = '';
   let enteringName = true;
   let showHomeScreen = false;
-  let showPetsScreen = false;
   let showLeaderboardScreen = false;
   let selectingCharacter = false;
   let selectingDifficulty = false;
@@ -400,19 +456,7 @@
   let difficultyIndex = 1; // 0 Easy, 1 Normal, 2 Hard
   const difficultyNames = ['Easy','Normal','Hard'];
   const difficultyMult = [0.85, 1.0, 1.2];
-  let petUnlocked = false;
-  let petCollection = [];
-  let activePetName = '';
-  const petByPoints = [
-    {name:'Cat', minScore:100, color:'#ffd1a3'},
-    {name:'Dog', minScore:500, color:'#d2b48c'},
-    {name:'Sun Bunny', minScore:1000, color:'#ffe39a'},
-    {name:'Monkey', minScore:1500, color:'#c89b6f'},
-    {name:'Bird', minScore:2000, color:'#a9d7ff'},
-    {name:'Sky Fox', minScore:2200, color:'#9fe2ff'},
-    {name:'Star Cub', minScore:3200, color:'#d7b3ff'}
-  ];
-  let pet = {x:50,y:260,vx:0,vy:0,color:'#ffe39a'};
+  // pets removed
 
   function getTopScores(){
     try{ return JSON.parse(localStorage.getItem('mini_plumber_scores') || '[]'); }catch{ return []; }
@@ -468,46 +512,31 @@
   }
 
   function reset(full=true){
-    if(full){ score=0; lives=3; bunniesLost=0; monsterEatsLeft=0; mushroomUnlocked=false; loadLevel(0); nextLuckyDrawScore = 3000; luckyDrawUsed = false; scoreSavedThisRun = false; showHomeScreen = !enteringName; showPetsScreen = false; showLeaderboardScreen = false; selectingCharacter = false; selectingDifficulty = false; }
+    if(full){ score=0; lives=3; bunniesLost=0; monsterEatsLeft=0; mushroomUnlocked=false; loadLevel(0); nextLuckyDrawScore = 3000; luckyDrawUsed = false; scoreSavedThisRun = false; showHomeScreen = !enteringName; showLeaderboardScreen = false; selectingCharacter = false; selectingDifficulty = false; }
     player = {x:80,y:300,w:34,h:48,vx:0,vy:0,onGround:false,face:1,inv:0,jumpsUsed:0,maxJumps:2,rocketFuel:100};
-    pet = {x:player.x-26,y:player.y+8,vx:0,vy:0,color:pet.color || '#ffe39a'};
-    explosions = []; diamondBursts = []; speedTrail = []; speedBoostTimer = 0; jumpBoostTimer = 0; shieldTimer = 0; invincibleTimer = 0; girlFlyTimer = 0; birdFlyTimer = 0; specialActiveTimer = 0; specialCooldown = 0; boyTripleJumpUsed = false;
+    explosions = []; diamondBursts = []; speedTrail = []; speedBoostTimer = 0; jumpBoostTimer = 0; shieldTimer = 0; invincibleTimer = 0; specialActiveTimer = 0; specialCooldown = 0; boyTripleJumpUsed = false;
     vineGrabbed = -1; vineAngle = 0; vineVel = 0;
     luckyDrawOpen = false; luckyMessage=''; luckyTimer = 0;
     cameraX=0; gameOver=false; win=false; jumpHeldLast=false;
   }
 
   function nextLevel(){
-    if(levelIndex < levels.length-1){
-      if(levelIndex === 2){
-        luckyMessage = 'Level 3 cleared! Earn more points to unlock pets.';
-        luckyTimer = 2.2;
-      }
-      loadLevel(levelIndex+1);
-      reset(false);
-      score += 800;
-      lives += 1; // reward: extra life for clearing a level
-      SFX.levelUp();
-    } else {
-      win = true;
-      lives += 1; // final clear reward life
-      SFX.win();
+    const nextIdx = levelIndex + 1;
+    if(nextIdx >= levels.length){
+      levels.push(generateLevel(nextIdx));
     }
+    if(levelIndex === 2){
+      luckyMessage = 'Level 3 cleared!';
+      luckyTimer = 2.2;
+    }
+    loadLevel(nextIdx);
+    reset(false);
+    score += 800;
+    lives += 1;
+    SFX.levelUp();
   }
 
-  function syncPetByPoints(){
-    for(const p of petByPoints){
-      if(score >= p.minScore && !petCollection.includes(p.name)){
-        petCollection.push(p.name);
-        activePetName = p.name;
-        pet.color = p.color;
-        petUnlocked = true;
-        luckyMessage = `New Pet Unlocked: ${p.name}!`;
-        luckyTimer = Math.max(luckyTimer, 2.2);
-      }
-    }
-    if(!activePetName && petCollection.length) activePetName = petCollection[petCollection.length-1];
-  }
+  // pet system removed
 
   function runLuckyDraw(choice=null){
     // random draw: 50% chance for +1 life
@@ -568,7 +597,7 @@
   function update(dt){
     if(luckyTimer>0) luckyTimer -= dt;
     if(gameOver || win){ saveScoreEntry(); return; }
-    if(enteringName || showHomeScreen || showPetsScreen || showLeaderboardScreen || selectingCharacter || selectingDifficulty) return;
+    if(enteringName || showHomeScreen || showLeaderboardScreen || selectingCharacter || selectingDifficulty) return;
 
     if(score >= nextLuckyDrawScore && !luckyDrawOpen && !luckyDrawUsed){
       luckyDrawOpen = true;
@@ -588,21 +617,7 @@
 
     const jumpNow = !!(keys.Space || keys.KeyZ);
 
-    if(activePetName==='Monkey' && petUnlocked && levelIndex===levels.length-1){
-      if(vineGrabbed < 0 && keys.ArrowUp){
-        for(let i=0;i<vines.length;i++){
-          const v=vines[i];
-          const nearX = Math.abs((player.x+player.w/2)-v.x) < 26;
-          const withinY = (player.y+player.h) > v.y && player.y < (v.y+v.h);
-          if(nearX && withinY){ vineGrabbed = i; vineAngle = 0; vineVel = 0; break; }
-        }
-      }
-      if(vineGrabbed>=0 && (keys.ArrowDown || (jumpNow && !jumpHeldLast))){
-        player.vx = Math.sin(vineAngle) * 460;
-        player.vy = -180;
-        vineGrabbed = -1;
-      }
-    }
+    // pet-powered vine ability removed
 
     if(vineGrabbed < 0){
       const boyExtraJumpAvailable = (characterIndex === 0 && !boyTripleJumpUsed) ? 1 : 0;
@@ -620,16 +635,9 @@
     jumpHeldLast = jumpNow;
 
     // rocket launcher flight (hold X)
-    if((characterIndex === 1 && girlFlyTimer > 0) || birdFlyTimer > 0){
-      // Girl/Bird fly mode
-      if(keys.KeyX){
-        player.vy -= 1500 * dt;
-        speedTrail.push({x:player.x+player.w/2, y:player.y+player.h+2, t:0.15});
-      }
-      player.rocketFuel = Math.min(100, player.rocketFuel + 14 * dt);
-    } else if(keys.KeyX && player.rocketFuel > 0){
+    if(keys.KeyX && player.rocketFuel > 0){
       player.vy -= 1700 * dt;
-      player.rocketFuel = Math.max(0, player.rocketFuel - 28 * dt);
+      player.rocketFuel = Math.max(0, player.rocketFuel - 22 * dt);
       speedTrail.push({x:player.x+player.w/2, y:player.y+player.h+2, t:0.15});
     } else {
       player.rocketFuel = Math.min(100, player.rocketFuel + 10 * dt);
@@ -723,20 +731,14 @@
       }
     });
 
-    if(petUnlocked && levelIndex===levels.length-1){
-      const tx = player.x - 26 + Math.sin(performance.now()*0.01)*8;
-      const ty = player.y + 8 + Math.sin(performance.now()*0.015)*5;
-      pet.x += (tx - pet.x) * Math.min(1, dt * 9);
-      pet.y += (ty - pet.y) * Math.min(1, dt * 9);
-    }
+    // pets removed
 
     coins.forEach(c=>{ 
       c.bob += dt*5; 
       if(c.taken) return; 
       const yy = c.y + Math.sin(c.bob)*4;
       const hit={x:c.x-c.r,y:yy-c.r,w:c.r*2,h:c.r*2};
-      const petHit = (petUnlocked && levelIndex===levels.length-1) && (Math.hypot((pet.x+10)-c.x,(pet.y+10)-yy) < 22);
-      if(rectHit(player,hit) || petHit){ c.taken=true; score+=100; SFX.coin(); }
+      if(rectHit(player,hit)){ c.taken=true; score+=100; SFX.coin(); }
     });
     rewards.forEach(r=>{
       r.bob += dt*6;
@@ -748,7 +750,7 @@
         if(r.type === 'jump') jumpBoostTimer = 5;
         if(r.type === 'shield') shieldTimer = 5;
         if(r.type === 'rocket') player.rocketFuel = Math.min(100, player.rocketFuel + 45);
-        if(r.type === 'invincible') invincibleTimer = 60;
+        if(r.type === 'invincible') invincibleTimer = 5;
         if(r.type === 'mushroom'){ mushroomUnlocked = true; monsterEatsLeft = 2; }
         score+=220;
         SFX.reward();
@@ -762,16 +764,12 @@
     if(jumpBoostTimer>0){ jumpBoostTimer -= dt; }
     if(shieldTimer>0){ shieldTimer -= dt; }
     if(invincibleTimer>0){ invincibleTimer -= dt; }
-    if(girlFlyTimer>0) girlFlyTimer -= dt;
-    if(birdFlyTimer>0) birdFlyTimer -= dt;
     if(specialActiveTimer>0) specialActiveTimer -= dt;
     if(specialCooldown>0) specialCooldown -= dt;
     player.maxJumps = jumpBoostTimer > 0 ? 3 : 2;
     speedTrail = speedTrail.filter(s=>((s.t-=dt)>0));
 
     if(player.x + player.w > level.flag.x){ nextLevel(); }
-
-    syncPetByPoints();
 
     cameraX = Math.max(0, Math.min(level.width-W, player.x - W*0.35));
     if(player.inv>0) player.inv -= dt;
@@ -783,16 +781,11 @@
     if(invincibleTimer>0) buffs.push('Rainbow Invincible');
     const bunnyInfo = levelIndex===3 ? ` | Bunnies Safe: ${bunnies.filter(b=>b.alive).length}/${bunnies.length}` : '';
     const fuelInfo = ` | Fuel: ${Math.round(player.rocketFuel)}%`;
-    const ability = (activePetName==='Bird' && levelIndex===levels.length-1) ? 'Bird Fly(120s)' : 'None';
-    const activeTxt = birdFlyTimer>0 ? ` [ACTIVE ${birdFlyTimer.toFixed(1)}s]` : '';
-    const specialInfo = (activePetName==='Bird' && levelIndex===levels.length-1)
-      ? ` | Ability: ${ability}${activeTxt}${specialCooldown>0 ? ` [CD ${specialCooldown.toFixed(1)}s]` : ' [READY]'}`
-      : ' | Ability: None';
-    const petState = petUnlocked ? (levelIndex===levels.length-1 ? activePetName : 'Stored (Last Level)') : 'LOCKED';
-    const petInfo = ` | Pet: ${petState} | Collection: ${petCollection.length}`;
+    const specialInfo = ' | Ability: None';
     const eatInfo = monsterEatsLeft>0 ? ` | Monster Bites: ${monsterEatsLeft}` : '';
-    const timeInfo = ` | Level Time: ${Math.floor(levelPlayTimer)}s/60s`;
-    hud.textContent = `Level: ${levelIndex+1}/4 | Diff: ${difficultyNames[difficultyIndex]} | Char: ${characterIndex+1} | Score: ${score} | Lives: ${lives}${timeInfo}${fuelInfo}${specialInfo}${petInfo}${eatInfo}${buffs.length ? ' | ' + buffs.join(' + ') : ''}${bunnyInfo}`;
+    const timeInfo = ` | Level Time: ${Math.floor(levelPlayTimer)}s`;
+    const themeInfo = level.theme ? ` | Theme: ${String(level.theme).toUpperCase()}` : '';
+    hud.textContent = `Level: ${levelIndex+1} | Diff: ${difficultyNames[difficultyIndex]} | Char: ${characterIndex+1} | Score: ${score} | Lives: ${lives}${themeInfo}${timeInfo}${fuelInfo}${specialInfo}${eatInfo}${buffs.length ? ' | ' + buffs.join(' + ') : ''}${bunnyInfo}`;
   }
 
   function drawCloud(x,y,s){
@@ -806,7 +799,105 @@
     const par = cameraX*0.25;
 
     // level-themed background
-    if(levelIndex === 1){
+    if(level.theme === 'robot'){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#cfd8e6');
+      g.addColorStop(1,'#7f8ca3');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+      for(let i=0;i<18;i++){
+        ctx.fillStyle='rgba(255,255,255,0.2)';
+        ctx.fillRect((i*90-(par*0.8)%90), 70+(i%5)*70, 42, 12);
+      }
+    } else if(level.theme === 'flower'){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#d7ffd6');
+      g.addColorStop(1,'#b9f0ff');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+      for(let i=0;i<26;i++){
+        const x=(i*80-(par*0.6)%100);
+        const y=90+(i%4)*95;
+        ctx.fillStyle='rgba(255,180,215,0.6)'; ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='rgba(255,240,160,0.85)'; ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+      }
+    } else if(level.theme === 'candy'){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#ffdff3');
+      g.addColorStop(1,'#fff2d8');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+      // cotton candy clouds
+      for(let i=0;i<8;i++){
+        const cx = (i*180 - (par*0.35)%220) + 20;
+        const cy = 70 + (i%3)*55;
+        ctx.fillStyle='rgba(255,255,255,0.95)';
+        ctx.beginPath(); ctx.arc(cx,cy,30,0,Math.PI*2); ctx.arc(cx+28,cy-10,34,0,Math.PI*2); ctx.arc(cx+58,cy,30,0,Math.PI*2); ctx.fill();
+      }
+
+      // pastel green hills with chocolate coating
+      for(let i=0;i<4;i++){
+        const hx = i*290 - (par*0.6)%290;
+        ctx.fillStyle='rgba(177,236,172,0.95)';
+        ctx.beginPath(); ctx.arc(hx+130, H-40, 120, Math.PI, 0); ctx.fill();
+        ctx.fillStyle='rgba(126,80,52,0.85)';
+        ctx.beginPath(); ctx.arc(hx+130, H-80, 92, Math.PI, 0); ctx.fill();
+      }
+
+      // lollipop trees
+      for(let i=0;i<9;i++){
+        const lx = i*120 - (par%120) + 40;
+        ctx.fillStyle='#9a6b3f'; ctx.fillRect(lx, H-190, 8, 90);
+        ctx.fillStyle = i%2 ? '#ff86c8' : '#9ad8ff';
+        ctx.beginPath(); ctx.arc(lx+4, H-200, 26, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.arc(lx+4, H-200, 18, 0, Math.PI*2); ctx.stroke();
+      }
+    } else if(level.theme === 'forest'){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#113826');
+      g.addColorStop(1,'#0a2218');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+      // giant background trees (covering most of the scene)
+      for(let i=0;i<7;i++){
+        const tx = (i*220 - (par*0.55)%240) - 80;
+        const tw = 48 + (i%3)*16;
+        const th = 330 + (i%3)*60;
+        ctx.fillStyle='rgba(36,70,44,0.72)';
+        ctx.fillRect(tx+70, H-th, tw, th);
+        ctx.fillStyle='rgba(28,90,50,0.62)';
+        ctx.beginPath(); ctx.arc(tx+95, H-th+35, 130, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(tx+150, H-th+70, 110, 0, Math.PI*2); ctx.fill();
+      }
+
+      // 5 random-ish yellow glow dots
+      for(let i=0;i<5;i++){
+        const gx = ((i*179 + (performance.now()*0.02)%W) % W);
+        const gy = 70 + (i*83)%240;
+        const glow = ctx.createRadialGradient(gx,gy,1,gx,gy,16);
+        glow.addColorStop(0,'rgba(255,245,130,0.95)');
+        glow.addColorStop(1,'rgba(255,245,130,0)');
+        ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(gx,gy,16,0,Math.PI*2); ctx.fill();
+      }
+
+      // grass patches on ground
+      for(let i=0;i<40;i++){
+        const gx = (i*58 - (par*1.2)%70);
+        const gy = 454 + (i%3);
+        ctx.fillStyle='rgba(120,210,110,0.88)';
+        ctx.fillRect(gx,gy,2,9);
+        ctx.fillRect(gx+3,gy-2,2,11);
+        ctx.fillRect(gx+6,gy,2,9);
+      }
+    } else if(level.theme === 'space'){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#0e1238');
+      g.addColorStop(1,'#020617');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+      for(let i=0;i<70;i++){
+        ctx.fillStyle='rgba(255,255,255,0.7)';
+        ctx.fillRect((i*47-(par*0.3)%W+W)%W, 20+(i*29)%H, 2, 2);
+      }
+    } else if(levelIndex === 1){
       // Level 2: volcano theme
       const g = ctx.createLinearGradient(0,0,0,H);
       g.addColorStop(0,'#ffb36b');
@@ -906,8 +997,23 @@
 
     ctx.fillStyle=pitColor; level.pits.forEach(p=>ctx.fillRect(p.x,level.groundY,p.w,90));
 
-    ctx.fillStyle='#ff6b6b';
-    getAllSpikes().forEach(s=>{ const n=Math.floor(s.w/11); for(let i=0;i<n;i++){ const x=s.x+i*11; ctx.beginPath(); ctx.moveTo(x,s.y+s.h); ctx.lineTo(x+5.5,s.y); ctx.lineTo(x+11,s.y+s.h); ctx.closePath(); ctx.fill(); } });
+    if(level.theme==='candy'){
+      ctx.fillStyle='#b87cff';
+      getAllSpikes().forEach(s=>{
+        const n=Math.floor(s.w/9);
+        for(let i=0;i<n;i++){
+          const x=s.x+i*9;
+          ctx.beginPath();
+          ctx.moveTo(x,s.y+s.h);
+          ctx.quadraticCurveTo(x+4.5,s.y-6,x+9,s.y+s.h);
+          ctx.closePath();
+          ctx.fill();
+        }
+      });
+    } else {
+      ctx.fillStyle='#ff6b6b';
+      getAllSpikes().forEach(s=>{ const n=Math.floor(s.w/11); for(let i=0;i<n;i++){ const x=s.x+i*11; ctx.beginPath(); ctx.moveTo(x,s.y+s.h); ctx.lineTo(x+5.5,s.y); ctx.lineTo(x+11,s.y+s.h); ctx.closePath(); ctx.fill(); } });
+    }
 
     ctx.fillStyle='#8b8b8b'; ctx.fillRect(level.flag.x,level.flag.y,8,level.flag.h);
     ctx.fillStyle='#ff4f4f'; ctx.beginPath(); ctx.moveTo(level.flag.x+8,level.flag.y+20); ctx.lineTo(level.flag.x+62,level.flag.y+40); ctx.lineTo(level.flag.x+8,level.flag.y+60); ctx.closePath(); ctx.fill();
@@ -1001,7 +1107,69 @@
     enemies.forEach(e=>{
       if(!e.alive) return;
 
-      if(e.type==='walker'){
+      if(level.theme==='robot'){
+        ctx.fillStyle='#90a4b8'; ctx.fillRect(e.x+2,e.y+2,e.w-4,e.h-4);
+        ctx.fillStyle='#5b6a7a'; ctx.fillRect(e.x+6,e.y+8,e.w-12,e.h-14);
+        ctx.fillStyle='#7affff'; ctx.fillRect(e.x+10,e.y+12,4,3); ctx.fillRect(e.x+22,e.y+12,4,3);
+      } else if(level.theme==='flower'){
+        ctx.fillStyle='#7fc96a'; ctx.beginPath(); ctx.arc(e.x+18,e.y+16,12,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='#ff8dc5';
+        for(let p=0;p<5;p++){ const a=(Math.PI*2/5)*p; ctx.beginPath(); ctx.arc(e.x+18+Math.cos(a)*11,e.y+16+Math.sin(a)*11,5,0,Math.PI*2); ctx.fill(); }
+        ctx.fillStyle='#fff59d'; ctx.beginPath(); ctx.arc(e.x+18,e.y+16,4,0,Math.PI*2); ctx.fill();
+      } else if(level.theme==='forest'){
+        if(e.type==='flyer'){
+          if(e.variant==='pixie'){
+            ctx.fillStyle='rgba(255,180,240,0.9)';
+            ctx.beginPath(); ctx.arc(e.x+18,e.y+14,6,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle='rgba(200,255,255,0.85)';
+            ctx.beginPath(); ctx.ellipse(e.x+11,e.y+10,6,3,-0.5,0,Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(e.x+25,e.y+10,6,3,0.5,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle='#fff'; ctx.fillRect(e.x+17,e.y+13,2,2);
+          } else {
+            ctx.fillStyle='#7a532f'; ctx.beginPath(); ctx.ellipse(e.x+18,e.y+14,10,7,0,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle='#5b7a4a'; ctx.beginPath(); ctx.ellipse(e.x+9,e.y+14,8,4,-0.3,0,Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(e.x+27,e.y+14,8,4,0.3,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle='#111'; ctx.fillRect(e.x+18,e.y+13,2,2);
+          }
+        } else if(e.type==='exploder'){
+          ctx.fillStyle='#70756f'; ctx.beginPath(); ctx.arc(e.x+18,e.y+16,13,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle='#8a8f88'; ctx.beginPath(); ctx.arc(e.x+12,e.y+11,4,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle='#111'; ctx.fillRect(e.x+13,e.y+15,2,2); ctx.fillRect(e.x+20,e.y+15,2,2);
+          ctx.fillStyle='#ff9aa2'; ctx.fillRect(e.x+15,e.y+20,6,2);
+        } else {
+          // living tree (bigger than player)
+          ctx.fillStyle='#6a4026'; ctx.fillRect(e.x+15,e.y+18,12,40);
+          ctx.fillStyle='#3f8f52'; ctx.beginPath(); ctx.arc(e.x+21,e.y+18,20,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(e.x+8,e.y+26,15,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(e.x+34,e.y+26,15,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle='#111'; ctx.fillRect(e.x+16,e.y+18,2,2); ctx.fillRect(e.x+24,e.y+18,2,2);
+          ctx.fillStyle='#9b5a40'; ctx.fillRect(e.x+18,e.y+24,6,2);
+        }
+      } else if(level.theme==='candy'){
+        if(e.type==='flyer'){
+          // gummy bear flyers
+          ctx.fillStyle='#ff9ed1';
+          ctx.beginPath(); ctx.arc(e.x+13,e.y+11,5,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(e.x+23,e.y+11,5,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.roundRect(e.x+10,e.y+13,16,14,7); ctx.fill();
+          ctx.fillStyle='#111'; ctx.fillRect(e.x+15,e.y+16,2,2); ctx.fillRect(e.x+20,e.y+16,2,2);
+        } else if(e.type==='exploder'){
+          // gummy worm exploders
+          ctx.strokeStyle='#ff7ac4'; ctx.lineWidth=6;
+          ctx.beginPath();
+          ctx.moveTo(e.x+6,e.y+18);
+          ctx.bezierCurveTo(e.x+14,e.y+8,e.x+22,e.y+28,e.x+30,e.y+16);
+          ctx.stroke();
+          ctx.fillStyle='#111'; ctx.fillRect(e.x+21,e.y+14,2,2);
+        } else {
+          // marshmallow walkers/jumpers
+          ctx.fillStyle='#fff9fb';
+          ctx.beginPath(); ctx.roundRect(e.x+3,e.y+6,e.w-6,e.h-8,9); ctx.fill();
+          ctx.fillStyle='rgba(255,200,230,0.45)'; ctx.fillRect(e.x+7,e.y+10,10,4);
+          ctx.fillStyle='#111'; ctx.fillRect(e.x+12,e.y+16,2,2); ctx.fillRect(e.x+20,e.y+16,2,2);
+          ctx.fillStyle='#ff9ec1'; ctx.fillRect(e.x+15,e.y+20,4,2);
+        }
+      } else if(e.type==='walker'){
         // brown blob (round + smile)
         ctx.fillStyle='#a76b3f';
         ctx.fillRect(e.x+2,e.y+2,e.w-4,e.h-4);
@@ -1136,18 +1304,7 @@
       ctx.restore();
     }
 
-    if(petUnlocked && levelIndex===levels.length-1){
-      ctx.fillStyle='rgba(0,0,0,0.2)';
-      ctx.beginPath(); ctx.ellipse(pet.x+10, pet.y+18, 8, 2.5, 0, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle=pet.color || '#ffe39a';
-      ctx.fillRect(pet.x+2, pet.y+6, 16, 10);
-      ctx.fillRect(pet.x+6, pet.y+2, 4, 6);
-      ctx.fillRect(pet.x+11, pet.y+1, 4, 7);
-      ctx.fillStyle='#111';
-      ctx.fillRect(pet.x+12, pet.y+9, 2, 2);
-      ctx.fillStyle='#ff9ea6';
-      ctx.fillRect(pet.x+16, pet.y+12, 2, 2);
-    }
+    // pet rendering removed
 
     ctx.restore();
 
@@ -1207,59 +1364,110 @@
       ctx.font='20px sans-serif';
       ctx.fillText('Type name, then press ENTER', W/2, H/2 + 78);
     } else if(showHomeScreen){
-      ctx.fillStyle='rgba(7,23,66,0.82)'; ctx.fillRect(0,0,W,H);
-      ctx.textAlign='center';
-      ctx.fillStyle='#fff'; ctx.font='bold 54px sans-serif';
-      ctx.fillText(`Mario Adventure - ${playerName}`, W/2, H/2 - 120);
+      const gHome = ctx.createLinearGradient(0,0,0,H);
+      gHome.addColorStop(0,'#c9f7e5');
+      gHome.addColorStop(1,'#bfe4ff');
+      ctx.fillStyle=gHome; ctx.fillRect(0,0,W,H);
 
-      // running character background animation
-      const rx = ((performance.now()*0.22) % (W+80)) - 40;
-      const ry = H - 130;
-      const leg = Math.sin(performance.now()*0.025)*4;
-      ctx.fillStyle='rgba(255,255,255,0.9)';
-      ctx.fillRect(rx, ry, 34, 48);
-      ctx.fillStyle='#ff5a7a'; ctx.fillRect(rx+4,ry+2,26,8);
-      ctx.fillStyle='#5f86ff'; ctx.fillRect(rx+8,ry+24,18,14);
-      ctx.fillStyle='#254ab0'; ctx.fillRect(rx+10,ry+40,6,6+leg); ctx.fillRect(rx+18,ry+40,6,6-leg);
+      // cute sparkles
+      const tt = performance.now()*0.001;
+      for(let i=0;i<32;i++){
+        const sx = (i*33 + (tt*22)%W) % W;
+        const sy = 30 + (i%10)*48 + Math.sin(tt*1.6+i)*6;
+        ctx.fillStyle = `rgba(255,255,255,${0.25 + (Math.sin(tt*3+i)+1)*0.15})`;
+        ctx.fillRect(sx, sy, 2, 2);
+      }
 
-      const playBtn = {x: W/2-120, y: H/2+20, w:240, h:52};
-      const petsBtn = {x: W/2-120, y: H/2+84, w:240, h:52};
-      const leadBtn = {x: W/2-120, y: H/2+148, w:240, h:52};
-      ctx.fillStyle='#ffd54d'; ctx.fillRect(playBtn.x, playBtn.y, playBtn.w, playBtn.h);
-      ctx.fillStyle='#111'; ctx.font='bold 32px sans-serif'; ctx.fillText('PLAY', W/2, playBtn.y+36);
-      ctx.fillStyle='#9fd3ff'; ctx.fillRect(petsBtn.x, petsBtn.y, petsBtn.w, petsBtn.h);
-      ctx.fillStyle='#111'; ctx.font='bold 27px sans-serif'; ctx.fillText('PETS', W/2, petsBtn.y+35);
-      ctx.fillStyle='#c2b7ff'; ctx.fillRect(leadBtn.x, leadBtn.y, leadBtn.w, leadBtn.h);
-      ctx.fillStyle='#111'; ctx.font='bold 26px sans-serif'; ctx.fillText('LEADERBOARD', W/2, leadBtn.y+35);
-    } else if(showPetsScreen){
-      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
       ctx.textAlign='center';
-      ctx.fillStyle='#fff'; ctx.font='bold 44px sans-serif';
-      ctx.fillText('Your Pets', W/2, 130);
-      const list = petCollection.length ? petCollection : ['(No pets yet)'];
-      ctx.font='bold 28px sans-serif';
-      list.slice(0,8).forEach((name,idx)=>{
-        const y = 200 + idx*44;
-        ctx.fillStyle = (name===activePetName) ? '#ffd54d' : '#e8f0ff';
-        ctx.fillText(name, W/2, y);
-      });
-      ctx.fillStyle='#fff'; ctx.font='20px sans-serif';
-      ctx.fillText('Press B / ESC / ENTER to return', W/2, H-70);
+      ctx.fillStyle='rgba(255,255,255,0.55)';
+      ctx.beginPath(); ctx.roundRect(W/2-300, H/2-190, 600, 78, 26); ctx.fill();
+      ctx.fillStyle='#2a365a'; ctx.font='bold 52px sans-serif';
+      ctx.fillText(`Mini Plumber Adventure`, W/2, H/2 - 138);
+      ctx.font='bold 24px sans-serif';
+      ctx.fillText(`${playerName}`, W/2, H/2 - 104);
+
+      // cute running character + blob monsters chasing animation
+      const ttRun = performance.now()*0.001;
+      const rx = ((ttRun*170) % (W+140)) - 70;
+      const ry = H - 132;
+      const leg = Math.sin(ttRun*11)*3.2;
+
+      // motion trail puffs
+      for(let i=0;i<4;i++){
+        const px = rx - i*10 - 6;
+        const py = ry + 42 + Math.sin(ttRun*7+i)*2;
+        ctx.fillStyle='rgba(255,255,255,0.28)';
+        ctx.beginPath(); ctx.arc(px,py,4-i*0.7,0,Math.PI*2); ctx.fill();
+      }
+
+      // runner shadow
+      ctx.fillStyle='rgba(0,0,0,0.16)';
+      ctx.beginPath(); ctx.ellipse(rx+18, ry+50, 14, 4, 0, 0, Math.PI*2); ctx.fill();
+
+      // runner body (cuter proportions)
+      ctx.fillStyle='#ff77ad'; ctx.fillRect(rx+5,ry+2,24,8); // hat
+      ctx.fillStyle='#ffc3dc'; ctx.fillRect(rx+7,ry+5,10,2); // hat highlight
+      ctx.fillStyle='#ffe4cf'; ctx.fillRect(rx+10,ry+12,14,11); // face
+      ctx.fillStyle='#111'; ctx.fillRect(rx+19,ry+15,2,2); // eye
+      ctx.fillStyle='#ff9bb8'; ctx.fillRect(rx+11,ry+18,2,2); // cheek
+      ctx.fillStyle='#6fa6ff'; ctx.fillRect(rx+9,ry+24,16,14); // outfit
+      ctx.fillStyle='#ffffff'; ctx.fillRect(rx+7,ry+24,3,8); ctx.fillRect(rx+25,ry+24,3,8); // hands
+      ctx.fillStyle='#5f7be6';
+      ctx.fillRect(rx+10,ry+38,6,7+leg); ctx.fillRect(rx+18,ry+38,6,7-leg); // legs
+      ctx.fillStyle='#6b3f2a';
+      ctx.fillRect(rx+9,ry+45+leg,8,3); ctx.fillRect(rx+17,ry+45-leg,8,3); // shoes
+
+      // cute blob chasers
+      for(let i=0;i<3;i++){
+        const bx = rx - 52 - i*36 + Math.sin(ttRun*5+i)*2;
+        const by = ry + 19 + (i%2)*4;
+        const bob = Math.sin(ttRun*8 + i*1.4)*1.5;
+        ctx.fillStyle = i===0 ? '#ffb3d9' : (i===1 ? '#b8e7ff' : '#d9c2ff');
+        ctx.beginPath();
+        ctx.roundRect(bx, by+bob, 24, 20, 9);
+        ctx.fill();
+        ctx.fillStyle='rgba(255,255,255,0.45)';
+        ctx.fillRect(bx+4, by+3+bob, 8, 3);
+        ctx.fillStyle='#111';
+        ctx.fillRect(bx+7, by+9+bob, 2, 2); ctx.fillRect(bx+15, by+9+bob, 2, 2);
+        ctx.fillStyle='#ff8fab';
+        ctx.fillRect(bx+10, by+14+bob, 4, 2);
+      }
+
+      const playBtn = {x: W/2-140, y: H/2+32, w:280, h:56};
+      const leadBtn = {x: W/2-140, y: H/2+106, w:280, h:56};
+
+      ctx.fillStyle='#ffd6ea'; ctx.beginPath(); ctx.roundRect(playBtn.x, playBtn.y, playBtn.w, playBtn.h, 18); ctx.fill();
+      ctx.fillStyle='#2a365a'; ctx.font='bold 32px sans-serif'; ctx.fillText('PLAY', W/2, playBtn.y+38);
+
+      ctx.fillStyle='#e6dcff'; ctx.beginPath(); ctx.roundRect(leadBtn.x, leadBtn.y, leadBtn.w, leadBtn.h, 18); ctx.fill();
+      ctx.fillStyle='#2a365a'; ctx.font='bold 26px sans-serif'; ctx.fillText('LEADERBOARD', W/2, leadBtn.y+37);
     } else if(showLeaderboardScreen){
-      ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
+      const gLead = ctx.createLinearGradient(0,0,0,H);
+      gLead.addColorStop(0,'#d9f5ff');
+      gLead.addColorStop(1,'#dff7e8');
+      ctx.fillStyle=gLead; ctx.fillRect(0,0,W,H);
       ctx.textAlign='center';
-      ctx.fillStyle='#fff'; ctx.font='bold 44px sans-serif';
-      ctx.fillText('Leaderboard', W/2, 120);
+
+      ctx.fillStyle='rgba(255,255,255,0.62)';
+      ctx.beginPath(); ctx.roundRect(W/2-260, 58, 520, 430, 28); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=2; ctx.stroke();
+
+      ctx.fillStyle='#2a365a'; ctx.font='bold 46px sans-serif';
+      ctx.fillText('🏆 Leaderboard', W/2, 122);
       const top = getTopScores();
       const rows = [top[0],top[1],top[2]];
       ctx.font='bold 30px sans-serif';
       rows.forEach((r,i)=>{
-        const y = 210 + i*70;
-        ctx.fillStyle = i===0 ? '#ffd54d' : '#e8f0ff';
+        const y = 205 + i*86;
+        const cardX = W/2-200;
+        ctx.fillStyle = i===0 ? '#ffe8a6' : (i===1 ? '#e7f3ff' : '#f0e8ff');
+        ctx.beginPath(); ctx.roundRect(cardX, y-36, 400, 58, 14); ctx.fill();
+        ctx.fillStyle = '#2a365a';
         const text = r ? `${i+1}. ${r.name} - ${r.score}` : `${i+1}. ---`;
         ctx.fillText(text, W/2, y);
       });
-      ctx.fillStyle='#fff'; ctx.font='20px sans-serif';
+      ctx.fillStyle='#2a365a'; ctx.font='20px sans-serif';
       ctx.fillText('Press B / ESC / ENTER to return', W/2, H-70);
     } else if(selectingCharacter){
       ctx.fillStyle='rgba(7,23,66,0.9)'; ctx.fillRect(0,0,W,H);
