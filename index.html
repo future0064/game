@@ -51,11 +51,10 @@
       <button id="fullscreenBtn" class="wide">FULLSCREEN</button>
     </div>
   </div>
-  <div class="tips">Controls: ← → move, Z/Space jump, X rocket fly, C switch character (1/2), Q/W/E choose special, F use special, R restart</div>
+  <div class="tips">Controls: ← → move, Z/Space jump, X rocket fly, C switch character (1/2), R restart</div>
   <div class="tips" style="margin-top:4px;">At game start: press C to choose character, then press ENTER/SPACE to start.</div>
   <div class="tips" id="abilityGuide" style="margin-top:6px; font-weight:700; color:#1f2a44;">
-    Character 1 (Original): choose one special → Q Speed / W Triple Jump buff / E Shield, press F to use.
-    Character 2 (Girl): fixed special → F activates 10s Fly Mode (hold X to fly).
+    Character specials removed: Boy and Girl no longer have superpowers.
   </div>
 </div>
 <script>
@@ -198,26 +197,11 @@
       if(!win) nextLevel();
       return;
     }
-    if (e.code === 'KeyQ') selectedAbilityByChar[characterIndex] = 'speed';
-    if (e.code === 'KeyW') selectedAbilityByChar[characterIndex] = 'jump';
-    if (e.code === 'KeyE') selectedAbilityByChar[characterIndex] = 'shield';
+    // Character superpowers removed (Boy/Girl). KeyF no longer triggers character abilities.
     if (e.code === 'KeyF' && specialCooldown <= 0){
       if(activePetName === 'Bird' && levelIndex===levels.length-1){
         birdFlyTimer = 120;
         specialCooldown = 18;
-        SFX.reward();
-      } else if(characterIndex === 1){
-        // Girl special: fly mode for 10s
-        girlFlyTimer = 10;
-        specialCooldown = 16;
-        SFX.reward();
-      } else {
-        const a = selectedAbilityByChar[characterIndex];
-        specialActiveTimer = 6;
-        specialCooldown = 12;
-        if(a === 'speed') speedBoostTimer = Math.max(speedBoostTimer, 5);
-        if(a === 'jump') jumpBoostTimer = Math.max(jumpBoostTimer, 5);
-        if(a === 'shield') shieldTimer = Math.max(shieldTimer, 5);
         SFX.reward();
       }
     }
@@ -799,9 +783,11 @@
     if(invincibleTimer>0) buffs.push('Rainbow Invincible');
     const bunnyInfo = levelIndex===3 ? ` | Bunnies Safe: ${bunnies.filter(b=>b.alive).length}/${bunnies.length}` : '';
     const fuelInfo = ` | Fuel: ${Math.round(player.rocketFuel)}%`;
-    const ability = (activePetName==='Bird' && levelIndex===levels.length-1) ? 'Bird Fly(120s)' : (characterIndex===1 ? 'Girl Fly(10s)' : ({speed:'Speed Boost', jump:'Jump Boost', shield:'Shield'})[selectedAbilityByChar[characterIndex]]);
-    const activeTxt = birdFlyTimer>0 ? ` [ACTIVE ${birdFlyTimer.toFixed(1)}s]` : (characterIndex===1 && girlFlyTimer>0 ? ` [ACTIVE ${girlFlyTimer.toFixed(1)}s]` : '');
-    const specialInfo = ` | Ability: ${ability}${activeTxt}${specialCooldown>0 ? ` [CD ${specialCooldown.toFixed(1)}s]` : ' [READY]'}`;
+    const ability = (activePetName==='Bird' && levelIndex===levels.length-1) ? 'Bird Fly(120s)' : 'None';
+    const activeTxt = birdFlyTimer>0 ? ` [ACTIVE ${birdFlyTimer.toFixed(1)}s]` : '';
+    const specialInfo = (activePetName==='Bird' && levelIndex===levels.length-1)
+      ? ` | Ability: ${ability}${activeTxt}${specialCooldown>0 ? ` [CD ${specialCooldown.toFixed(1)}s]` : ' [READY]'}`
+      : ' | Ability: None';
     const petState = petUnlocked ? (levelIndex===levels.length-1 ? activePetName : 'Stored (Last Level)') : 'LOCKED';
     const petInfo = ` | Pet: ${petState} | Collection: ${petCollection.length}`;
     const eatInfo = monsterEatsLeft>0 ? ` | Monster Bites: ${monsterEatsLeft}` : '';
@@ -1166,12 +1152,56 @@
     ctx.restore();
 
     if(enteringName){
-      ctx.fillStyle='rgba(7,23,66,0.92)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#CFF5D6'; ctx.fillRect(0,0,W,H);
+
+      // floating bubbles + sparkles background (soft, not plain)
+      const bt = performance.now() * 0.001;
+      for(let i=0;i<18;i++){
+        const bx = ((bt * (16 + i*1.2) + i*62) % (W + 120)) - 60;
+        const by = H - ((bt * (22 + (i%5)*3) + i*45) % (H + 120));
+        const r = 6 + (i%4)*3;
+        const pink = (i % 3 === 0);
+        ctx.fillStyle = pink ? 'rgba(255,190,220,0.34)' : 'rgba(255,255,255,0.24)';
+        ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = pink ? 'rgba(255,160,205,0.62)' : 'rgba(255,255,255,0.48)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      for(let i=0;i<26;i++){
+        const sx = (i*37 + (bt*28)%W) % W;
+        const sy = 45 + (i%9)*52 + Math.sin(bt*1.7 + i)*7;
+        const tw = 1.5 + (Math.sin(bt*4 + i*2.3)+1)*1.2;
+        ctx.fillStyle = `rgba(255,255,255,${0.25 + (Math.sin(bt*3+i)+1)*0.18})`;
+        ctx.fillRect(sx, sy, tw, tw);
+      }
+
       ctx.textAlign='center';
-      ctx.fillStyle='#fff'; ctx.font='bold 48px sans-serif';
-      ctx.fillText('Enter Your Nickname', W/2, H/2 - 70);
-      ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(W/2-220,H/2-20,440,62);
-      ctx.fillStyle='#fff'; ctx.font='bold 34px sans-serif';
+
+      // bubbly logo
+      const logoY = H/2 - 145;
+      ctx.fillStyle='rgba(255,255,255,0.42)';
+      ctx.beginPath();
+      ctx.roundRect(W/2-290, logoY-38, 580, 74, 26);
+      ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.7)';
+      ctx.lineWidth=2;
+      ctx.stroke();
+
+      const logoGrad = ctx.createLinearGradient(0, logoY-26, 0, logoY+8);
+      logoGrad.addColorStop(0,'#ffffff');
+      logoGrad.addColorStop(1,'#ffd5ea');
+      ctx.fillStyle=logoGrad;
+      ctx.strokeStyle='rgba(255,145,195,0.95)';
+      ctx.lineWidth=4;
+      ctx.font='bold 40px sans-serif';
+      ctx.strokeText('MINI PLUMBER ADVENTURES', W/2, logoY);
+      ctx.fillText('MINI PLUMBER ADVENTURES', W/2, logoY);
+
+      ctx.fillStyle='#1f2a44'; ctx.font='bold 48px sans-serif';
+      ctx.fillText('Enter Your Nickname', W/2, H/2 - 58);
+      ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.fillRect(W/2-220,H/2-20,440,62);
+      ctx.fillStyle='#1f2a44'; ctx.font='bold 34px sans-serif';
       const cursor = Math.floor(performance.now()/500)%2===0 ? '|' : '';
       ctx.fillText((playerName || '') + cursor, W/2, H/2 + 23);
       ctx.font='20px sans-serif';
@@ -1288,6 +1318,38 @@
 
     if(win || gameOver){
       ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,H);
+
+      if(win){
+        // little celebration: confetti + sparkle bursts
+        const t = performance.now() * 0.001;
+        for(let i=0;i<140;i++){
+          const x = (i*37 + (t*(60 + (i%7)*9))) % (W+40) - 20;
+          const y = ((i*29 + t*(110 + (i%5)*14)) % (H+60)) - 30;
+          const w = 4 + (i%4);
+          const h = 8 + (i%6);
+          const rot = Math.sin(t*5 + i) * 0.8;
+          ctx.save();
+          ctx.translate(x,y);
+          ctx.rotate(rot);
+          ctx.fillStyle = `hsl(${(i*19 + t*160)%360} 90% 65%)`;
+          ctx.fillRect(-w/2,-h/2,w,h);
+          ctx.restore();
+        }
+
+        for(let i=0;i<8;i++){
+          const cx = W*0.15 + i*(W*0.1);
+          const cy = 120 + Math.sin(t*1.8 + i)*20;
+          for(let k=0;k<10;k++){
+            const a = (Math.PI*2/10)*k + t*0.8;
+            const r = 18 + ((t*40 + i*13 + k*7) % 26);
+            ctx.fillStyle = `hsla(${(i*45+k*22+t*180)%360},100%,70%,0.75)`;
+            ctx.beginPath();
+            ctx.arc(cx + Math.cos(a)*r, cy + Math.sin(a)*r, 2.5, 0, Math.PI*2);
+            ctx.fill();
+          }
+        }
+      }
+
       ctx.fillStyle='#fff'; ctx.font='bold 54px sans-serif'; ctx.textAlign='center';
       ctx.fillText(win ? 'All 4 Levels Cleared!' : 'Game Over', W/2, H/2 - 20);
       ctx.font='28px sans-serif'; ctx.fillText('Press R to restart', W/2, H/2 + 35);
